@@ -209,13 +209,17 @@ public final class RayaVoice {
                                     "§7[Райя-Прайм] (голос не получился, говорю бипами: " + shown + ")"));
                         }
                     }
-                    if (raya != null && raya.isAlive() && !raya.isRemoved() && isVoiceChatActive()
-                            && RayaVoiceChatPlugin.isConnected(listenerId)) {
+                    if (RayaConfig.VOICECHAT_3D_SPEECH.get() && raya != null && raya.isAlive() && !raya.isRemoved()
+                            && isVoiceChatActive() && RayaVoiceChatPlugin.isConnected(listenerId)) {
+                        RayaPrimeMod.LOGGER.info("[RayaPrime] Голос: 3D через Simple Voice Chat ({} сэмплов)", out.length);
                         RayaVoiceChatPlugin.play(raya, GeminiClient.resampleTo48k(out, outRate));
                         return;
                     }
                     if (target != null) {
+                        RayaPrimeMod.LOGGER.info("[RayaPrime] Голос: отправка клиенту напрямую ({} сэмплов, {} Гц)", out.length, outRate);
                         PacketDistributor.sendToPlayer(target, new RayaSpeechPayload(toBytes(out, outRate), outRate));
+                    } else {
+                        RayaPrimeMod.LOGGER.warn("[RayaPrime] Голос: игрок недоступен, звук не отправлен");
                     }
                 } catch (Throwable t) {
                     RayaPrimeMod.LOGGER.warn("[RayaPrime] Не удалось воспроизвести голос: {}", t.toString());

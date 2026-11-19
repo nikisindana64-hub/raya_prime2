@@ -23,6 +23,7 @@ public class RayaConfig {
     public static final ModConfigSpec.ConfigValue<String> TTS_VOICE_CRIMSON;
     public static final ModConfigSpec.BooleanValue MOOD_VOICE_EFFECTS;
     public static final ModConfigSpec.BooleanValue TTS_STYLE;
+    public static final ModConfigSpec.BooleanValue VOICECHAT_3D_SPEECH;
 
     public static final ModConfigSpec.BooleanValue ALLOW_BLOCK_BREAKING;
     public static final ModConfigSpec.BooleanValue ALLOW_BLOCK_PLACING;
@@ -103,6 +104,10 @@ public class RayaConfig {
         TTS_VOICE_CRIMSON = BUILDER
                 .comment("Голос Раи в «Кровавом режиме» (бой). Пусто = обычный голос.")
                 .define("ttsVoiceCrimson", "Kore");
+        VOICECHAT_3D_SPEECH = BUILDER
+                .comment("Проигрывать голос Раи как 3D-звук через Simple Voice Chat (если он запущен и ты в нём).",
+                        "По умолчанию выключено: голос идёт напрямую в игру и слышен всегда. Включай, если нужен звук именно от тела Раи в пространстве.")
+                .define("voiceChat3dSpeech", false);
         TTS_STYLE = BUILDER
                 .comment("Передавать TTS манеру речи по настроению (весело, холодно, испуганно) — поддерживают модели gemini-3.8-*-tts.")
                 .define("ttsStyle", true);

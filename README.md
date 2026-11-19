@@ -7,7 +7,7 @@
 **Вариант А — на своём ПК (Windows):**
 1. Поставь JDK 21 (https://adoptium.net/).
 2. Распакуй папку, дважды кликни `build.bat`. Первая сборка скачивает NeoForge и качает ~несколько минут.
-3. Готовый мод: `build/libs/rayaprime-1.5.0.jar` → положи в `mods/`.
+3. Готовый мод: `build/libs/rayaprime-1.5.1.jar` → положи в `mods/`.
 
 (Linux/macOS: `./build.sh`.)
 

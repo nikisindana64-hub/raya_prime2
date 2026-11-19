@@ -110,6 +110,15 @@ public final class RayaBuild {
                 String wood = f.substring(0, f.length() - 7);
                 return new Palette(f, wood + "_log|" + f, wood + "_stairs|" + f, wood + "_door|door", "~cobblestone|" + f);
             }
+            // брёвна/стволы: стены остаются как просили, но ступени крыши и дверь берём из той же породы дерева
+            for (String suffix : new String[]{"_log", "_wood", "_stem", "_hyphae"}) {
+                if (f.endsWith(suffix)) {
+                    String wood = f.substring(0, f.length() - suffix.length());
+                    if (wood.startsWith("stripped_")) wood = wood.substring(9);
+                    String planks = wood + "_planks";
+                    return new Palette(f, f, wood + "_stairs|" + planks, wood + "_door|door", "~cobblestone|" + f);
+                }
+            }
             if (f.equals("planks")) {
                 return new Palette(f, "log|" + f, "stairs|" + f, "door", "~cobblestone|" + f);
             }
@@ -170,33 +179,56 @@ public final class RayaBuild {
                 int ww = clamp(w, 3, 11, 7), dd = clamp(d, 3, 11, 7), hh = clamp(h, 3, 7, 4);
                 houseSteps(out, f, pal, roof, ww, dd, hh);
             }
-            case "tower", "башня" -> {
-                name = "башня";
-                int ww = clamp(w, 3, 7, 3), hh = clamp(h, 3, 32, 10);
+            case "tower", "watchtower", "башня", "вышка", "смотровая" -> {
+                name = "смотровая башня";
+                int ww = clamp(w, 3, 7, 5), hh = clamp(h, 4, 32, 9);
                 int lo = -((ww - 1) / 2), hi = ww / 2;
                 int c = (ww - 1) / 2;
-                for (int y = -1; y < hh; y++) {
+                // корпус: пол, стены с входом спереди и бойницами, угловые столбы
+                for (int y = -1; y <= hh - 2; y++) {
                     for (int rx = lo; rx <= hi; rx++) {
                         for (int rz = 0; rz < ww; rz++) {
                             boolean edge = rx == lo || rx == hi || rz == 0 || rz == ww - 1;
+                            boolean corner = (rx == lo || rx == hi) && (rz == 0 || rz == ww - 1);
                             if (y == -1) {
                                 out.add(st(f.at(rx, y, rz), wallBlock));
                             } else if (edge) {
-                                if (rz == 0 && rx == 0 && y <= 1) continue; // вход
-                                boolean slit = y % 4 == 2 && y > 2 && ww >= 3
+                                if (rz == 0 && rx == 0 && y <= 1) continue; // вход 1×2
+                                boolean slit = y >= 2 && y % 4 == 2 && !corner
                                         && ((rx == 0 && (rz == 0 || rz == ww - 1)) || (rz == c && (rx == lo || rx == hi)));
-                                out.add(slit ? opt(f.at(rx, y, rz), "glass_pane", null) : st(f.at(rx, y, rz), (rx == lo || rx == hi) && (rz == 0 || rz == ww - 1) ? pal.pillar() : wallBlock));
+                                if (slit) {
+                                    out.add(opt(f.at(rx, y, rz), "glass_pane", null));
+                                } else {
+                                    out.add(st(f.at(rx, y, rz), corner ? pal.pillar() : wallBlock));
+                                }
                             }
                         }
                     }
                 }
-                // зубцы наверху
+                // верхняя площадка (с люком под лестницу) и зубцы по краю
+                for (int rx = lo; rx <= hi; rx++) {
+                    for (int rz = 0; rz < ww; rz++) {
+                        if (rx == 0 && rz == ww - 2) continue; // люк
+                        out.add(st(f.at(rx, hh - 1, rz), wallBlock));
+                    }
+                }
                 for (int rx = lo; rx <= hi; rx++) {
                     for (int rz = 0; rz < ww; rz++) {
                         boolean edge = rx == lo || rx == hi || rz == 0 || rz == ww - 1;
-                        if (edge && (rx + rz) % 2 == 0) out.add(st(f.at(rx, hh, rz), wallBlock));
+                        boolean corner = (rx == lo || rx == hi) && (rz == 0 || rz == ww - 1);
+                        if (edge && (corner || (rx + rz) % 2 == 0 || (rx == 0 && rz == ww - 1))) {
+                            out.add(st(f.at(rx, hh, rz), corner ? pal.pillar() : wallBlock));
+                        }
                     }
                 }
+                // внутренняя лестница у задней стены до самой площадки и чуть выше
+                for (int y = 0; y <= hh; y++) {
+                    out.add(opt(f.at(0, y, ww - 2), "ladder", f.fwd()));
+                }
+                // свет: внизу и на площадке (только если факелы есть у самой Раи)
+                out.add(opt(f.at(lo + 1, 0, 1), "~torch", null));
+                out.add(opt(f.at(hi - 1, hh, 1), "~torch", null));
+                out.sort(Comparator.comparingInt(s2 -> s2.pos().getY()));
             }
             case "wall", "стена" -> {
                 name = "стена";
@@ -316,7 +348,7 @@ public final class RayaBuild {
                             || ((rz == 0 || rz == dd - 1) && fbWin.contains(rx))
                             || (rz == dd - 1 && ww >= 5 && rx == 0));
                     if (window) {
-                        out.add(st(f.at(rx, y, rz), "glass_pane|glass|" + wall));
+                        out.add(opt(f.at(rx, y, rz), "glass_pane|glass", null)); // нет стекла — останется проём-окно
                     } else if (y == 0) {
                         out.add(st(f.at(rx, y, rz), pal.base()));
                     } else {
