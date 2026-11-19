@@ -75,7 +75,7 @@ public final class GeminiClient {
         int lastStatus = 0;
         int netFails = 0;
         for (String model : modelChain(RayaConfig.GEMINI_MODEL.get().trim(), RayaConfig.GEMINI_FALLBACK_MODELS.get())) {
-            if (netFails >= 2) break; // сеть недоступна — перебор моделей бессмыслен
+            if (netFails >= 3) break; // сеть недоступна — перебор моделей бессмыслен
             boolean useThinking = !thinking.isEmpty() && model.startsWith("gemini-3");
             boolean withThinking = useThinking;
             for (int attempt = 0; attempt < 3; attempt++) {
@@ -91,7 +91,12 @@ public final class GeminiClient {
                     RayaPrimeMod.LOGGER.info("[RayaPrime] Gemini ({}) ответил за {} мс", model, System.currentTimeMillis() - t0);
                     return text;
                 } catch (java.io.IOException e) {
-                    // таймаут / нет соединения / обрыв — это сеть, а не модель
+                    // таймаут / нет соединения / обрыв — это сеть, а не модель. Обрыв соединения часто разовый: один повтор
+                    if (attempt == 0 && !(e instanceof java.net.http.HttpTimeoutException)) {
+                        RayaPrimeMod.LOGGER.warn("[RayaPrime] Обрыв соединения ({}), повторяю: {}", model, e.toString());
+                        Thread.sleep(700L);
+                        continue;
+                    }
                     netFails++;
                     RayaPrimeMod.LOGGER.warn("[RayaPrime] Сеть: {} ({}) за {} мс", e.getClass().getSimpleName(), model, System.currentTimeMillis() - t0);
                     errors.append("\n• ").append(model).append(": сеть — ").append(e.getClass().getSimpleName())
@@ -155,7 +160,8 @@ public final class GeminiClient {
         c.addProperty("role", "user");
         JsonArray parts = new JsonArray();
         JsonObject tp = new JsonObject();
-        tp.addProperty("text", "Скажи дружелюбно, живо и немного иронично, как умная ИИ-помощница: " + text);
+        // Только сам текст: модели TTS зачитывают ВСЁ, что им дали (включая «скажи весело:»)
+        tp.addProperty("text", text);
         parts.add(tp);
         c.add("parts", parts);
         contents.add(c);
@@ -180,50 +186,112 @@ public final class GeminiClient {
         return payload;
     }
 
-    /** Синтез речи Gemini TTS. Возвращает PCM (обычно 24 кГц) или null при неудаче. Вызывать из фонового потока. */
+    /** Причина последней неудачи TTS (для диагностики в чате), null если всё хорошо. */
+    public static volatile String lastTtsError = null;
+
     public static Pcm synthesizeSpeech(String apiKey, String text) {
-        String voice = RayaConfig.TTS_VOICE.get().trim();
+        return synthesizeSpeech(apiKey, text, RayaConfig.TTS_VOICE.get().trim());
+    }
+
+    /** Синтез речи Gemini TTS. Возвращает PCM (обычно 24 кГц) или null при неудаче. Вызывать из фонового потока. */
+    public static Pcm synthesizeSpeech(String apiKey, String text, String voice) {
+        if (voice == null || voice.isBlank()) voice = RayaConfig.TTS_VOICE.get().trim();
+        StringBuilder errors = new StringBuilder();
+        boolean newShape = false; // запоминаем форму voiceConfig, которая сработала
         for (String model : modelChain(RayaConfig.TTS_MODEL.get().trim(), RayaConfig.TTS_FALLBACK_MODELS.get())) {
-            // Форма voiceConfig отличается у разных поколений TTS-моделей: пробуем обе
-            for (boolean newShape : new boolean[]{false, true}) {
+            for (int attempt = 0; attempt < 3; attempt++) {
                 try {
                     JsonObject resp = post(model, apiKey, ttsPayload(text, voice, newShape), 45);
-                    JsonArray cand = resp.getAsJsonArray("candidates");
-                    if (cand == null || cand.isEmpty()) break;
-                    JsonObject content = cand.get(0).getAsJsonObject().getAsJsonObject("content");
-                    if (content == null) break;
-                    for (JsonElement p : content.getAsJsonArray("parts")) {
-                        JsonObject po = p.getAsJsonObject();
-                        JsonObject inline = po.has("inlineData") ? po.getAsJsonObject("inlineData")
-                                : (po.has("inline_data") ? po.getAsJsonObject("inline_data") : null);
-                        if (inline == null) continue;
-                        byte[] bytes = Base64.getDecoder().decode(inline.get("data").getAsString());
-                        int rate = 24000;
-                        String mime = inline.has("mimeType") ? inline.get("mimeType").getAsString() : "";
-                        int idx = mime.indexOf("rate=");
-                        if (idx >= 0) {
-                            try {
-                                rate = Integer.parseInt(mime.substring(idx + 5).replaceAll("[^0-9].*$", ""));
-                            } catch (NumberFormatException ignored) {
-                            }
-                        }
-                        Pcm pcm = parseAudio(bytes, rate);
-                        RayaPrimeMod.LOGGER.info("[RayaPrime] TTS ({}): {} сэмплов, {} Гц", model, pcm.samples().length, pcm.rate());
+                    Pcm pcm = extractAudio(resp, model);
+                    if (pcm != null) {
+                        lastTtsError = null;
                         return pcm;
                     }
+                    errors.append(" ").append(model).append(": пустой ответ;");
                     break;
                 } catch (GeminiException e) {
-                    RayaPrimeMod.LOGGER.warn("[RayaPrime] TTS: {}", e.getMessage());
-                    if (e.status == 401 || e.status == 403 || e.status == 429) return null;
-                    if (e.status == 400 && !newShape) continue; // возможно, другая форма voiceConfig
+                    RayaPrimeMod.LOGGER.warn("[RayaPrime] TTS (попытка {}): {}", attempt + 1, e.getMessage());
+                    if (e.status == 401 || e.status == 403) {
+                        lastTtsError = "ключ не подходит для TTS (HTTP " + e.status + ")";
+                        return null;
+                    }
+                    if (e.status == 400 && attempt == 0) {
+                        newShape = !newShape; // возможно, другая форма voiceConfig
+                        continue;
+                    }
+                    if ((e.status == 429 || e.status == 500 || e.status == 503) && attempt < 2) {
+                        sleepQuietly(e.status == 429 ? 4000L : 1500L * (attempt + 1)); // лимит запросов/перегрузка — подождать
+                        continue;
+                    }
+                    errors.append(" ").append(model).append(": HTTP ").append(e.status).append(';');
+                    break;
+                } catch (java.io.IOException e) {
+                    RayaPrimeMod.LOGGER.warn("[RayaPrime] TTS сеть ({}): {}", model, e.toString());
+                    if (attempt < 1) {
+                        sleepQuietly(800L);
+                        continue;
+                    }
+                    errors.append(" ").append(model).append(": сеть ").append(e.getClass().getSimpleName()).append(';');
                     break;
                 } catch (Exception e) {
                     RayaPrimeMod.LOGGER.warn("[RayaPrime] TTS не удался на модели {}: {}", model, e.toString());
+                    errors.append(" ").append(model).append(": ").append(e.getClass().getSimpleName()).append(';');
                     break;
                 }
             }
         }
+        lastTtsError = errors.length() == 0 ? "неизвестная ошибка" : errors.toString().trim();
         return null;
+    }
+
+    private static void sleepQuietly(long ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static Pcm extractAudio(JsonObject resp, String model) {
+        JsonArray cand = resp.getAsJsonArray("candidates");
+        if (cand == null || cand.isEmpty()) return null;
+        JsonObject content = cand.get(0).getAsJsonObject().getAsJsonObject("content");
+        if (content == null || !content.has("parts")) return null;
+        for (JsonElement p : content.getAsJsonArray("parts")) {
+            JsonObject po = p.getAsJsonObject();
+            JsonObject inline = po.has("inlineData") ? po.getAsJsonObject("inlineData")
+                    : (po.has("inline_data") ? po.getAsJsonObject("inline_data") : null);
+            if (inline == null) continue;
+            byte[] bytes = Base64.getDecoder().decode(inline.get("data").getAsString());
+            int rate = 24000;
+            String mime = inline.has("mimeType") ? inline.get("mimeType").getAsString() : "";
+            int idx = mime.indexOf("rate=");
+            if (idx >= 0) {
+                try {
+                    rate = Integer.parseInt(mime.substring(idx + 5).replaceAll("[^0-9].*$", ""));
+                } catch (NumberFormatException ignored) {
+                }
+            }
+            Pcm pcm = parseAudio(bytes, rate);
+            RayaPrimeMod.LOGGER.info("[RayaPrime] TTS ({}): {} сэмплов, {} Гц", model, pcm.samples().length, pcm.rate());
+            return pcm;
+        }
+        return null;
+    }
+
+    /** Изменить темп и высоту голоса как у магнитофона: factor>1 — выше и быстрее, <1 — ниже и медленнее. */
+    public static short[] changeSpeed(short[] src, double factor) {
+        if (src.length < 2 || Math.abs(factor - 1.0) < 0.01) return src;
+        int outLen = (int) (src.length / factor);
+        short[] out = new short[outLen];
+        for (int i = 0; i < outLen; i++) {
+            double pos = i * factor;
+            int i0 = (int) pos;
+            int i1 = Math.min(i0 + 1, src.length - 1);
+            double frac = pos - i0;
+            out[i] = (short) (src[Math.min(i0, src.length - 1)] * (1.0 - frac) + src[i1] * frac);
+        }
+        return out;
     }
 
     /** Разбор ответа TTS: либо WAV с заголовком RIFF, либо «сырой» PCM s16le. */

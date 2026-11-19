@@ -54,6 +54,8 @@ import net.minecraft.world.phys.Vec3;
 
 import javax.annotation.Nullable;
 import java.util.ArrayDeque;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
@@ -103,6 +105,13 @@ public class RayaPrimeEntity extends PathfinderMob {
     private int fearAnnounceCooldown = 0;
     private LivingEntity fearSource = null;
     private int returnAnnounceCooldown = 0;
+    private int idleChatCooldown = 20 * 90;
+    private RayaBuild.Plan buildPlan = null;
+    private boolean guardMode = false;
+    private final Map<String, BlockPos> waypoints = new LinkedHashMap<>();
+    private int healCooldownTicks = 0;
+    private int warnCooldownTicks = 0;
+    private int lastIdleLine = -1;
 
     public RayaPrimeEntity(EntityType<? extends PathfinderMob> type, Level level) {
         super(type, level);
@@ -142,6 +151,7 @@ public class RayaPrimeEntity extends PathfinderMob {
     protected void registerGoals() {
         this.goalSelector.addGoal(1, new RayaGoals.RayaHideGoal(this));
         this.goalSelector.addGoal(2, new RayaGoals.RayaCombatGoal(this));
+        this.goalSelector.addGoal(3, new RayaGoals.RayaBuildGoal(this));
         this.goalSelector.addGoal(3, new RayaGoals.RayaExecuteTaskGoal(this));
         this.goalSelector.addGoal(4, new RayaGoals.RayaFollowOwnerGoal(this));
     }
@@ -175,9 +185,12 @@ public class RayaPrimeEntity extends PathfinderMob {
             if (this.tickCount % 20 == 0) {
                 getOwnerUUID().ifPresent(RayaPresence::mark);
                 tickReturn();
+                tickIdleChatter();
+                tickCare();
             }
             if (this.tickCount % 10 == 0) {
                 tickFear();
+                tickGuard();
             }
             if (this.emotionTimer > 0 && --this.emotionTimer == 0) {
                 restoreBaseEmotion();
@@ -299,6 +312,15 @@ public class RayaPrimeEntity extends PathfinderMob {
         Player owner = getOwnerPlayer();
         if (owner != null) {
             owner.sendSystemMessage(Component.literal("§b[Райя-Прайм]§r " + text));
+        }
+    }
+
+    /** Сказать в чат И голосом. */
+    public void say(String text, RayaVoice.Mood mood) {
+        tell(text);
+        Player owner = getOwnerPlayer();
+        if (owner instanceof ServerPlayer sp && this.level() instanceof ServerLevel sl) {
+            RayaVoice.speak(sl.getServer(), this, sp, text, RayaConfig.getEffectiveApiKey(), mood);
         }
     }
 
@@ -671,8 +693,14 @@ public class RayaPrimeEntity extends PathfinderMob {
         if ("HIDE_BEHIND_BLOCKS".equals(getActiveMode())) {
             setActiveMode(this.preFearMode);
         }
-        tell("Кажется, оно ушло... Фух, можно выдохнуть.");
+        say(CALM_LINES[this.random.nextInt(CALM_LINES.length)], RayaVoice.Mood.NORMAL);
     }
+
+    private static final String[] CALM_LINES = {
+            "Кажется, оно ушло... Фух, можно выдохнуть.",
+            "Угроза пропала. Ух, мои вентиляторы до сих пор дрожат.",
+            "Всё, опасность миновала. Я снова с тобой, мой носитель!"
+    };
 
     private static final String[] FEAR_LINES = {
             "Там %s! Мне страшно, я прячусь! Не подходи к нему, носитель!",
@@ -683,17 +711,96 @@ public class RayaPrimeEntity extends PathfinderMob {
     private void announceFear(LivingEntity scary) {
         String name = scary.getName().getString();
         String text = String.format(FEAR_LINES[this.random.nextInt(FEAR_LINES.length)], name);
-        tell(text);
+        say(text, RayaVoice.Mood.FEAR);
+    }
+
+    // =========================================================================
+    // Самостоятельные реплики (без запросов к Gemini)
+    // =========================================================================
+
+    private static final String[] LINES_LOW_HP = {
+            "Носитель, у тебя совсем мало здоровья! Давай-ка поосторожнее.",
+            "Шанс твоего выживания сейчас не радует. Может, подлечимся?",
+            "Эй, ты вообще в порядке? Здоровья остаётся мало!"
+    };
+    private static final String[] LINES_HUNGRY = {
+            "Мой носитель, у тебя урчит в животе. Пора перекусить!",
+            "Показатели голода в красной зоне. Поешь, пожалуйста.",
+            "Как твой П.Е.Р.С.И.К., заявляю: тебе срочно нужна еда."
+    };
+    private static final String[] LINES_NIGHT = {
+            "Уже ночь. Шанс встретить монстров вырос процентов на семьдесят.",
+            "Темнеет... Давай держаться вместе, мне так спокойнее.",
+            "Ночью всё интереснее. И опаснее. Я присмотрю за тобой!"
+    };
+    private static final String[] LINES_RAIN = {
+            "Дождь пошёл. Мой корпус водонепроницаемый, а ты не промок?",
+            "Капли стучат по вольфрамовой стали. Мило, правда?",
+            "Гроза! Красиво, но давай не стоять на открытом месте."
+    };
+    private static final String[] LINES_MOBS = {
+            "Вокруг многовато враждебных существ. Хочешь, устрою ЭМИ-разряд?",
+            "Я насчитала несколько противников рядом. Будь начеку!"
+    };
+    private static final String[] LINES_CHAT = {
+            "Мне нравится летать рядом с тобой. Скажи, если нужна помощь!",
+            "Если что-то понадобится построить, сломать или найти — просто скажи.",
+            "Я могу рассказать про любой установленный мод. Спрашивай!",
+            "Знаешь, я лучшая П.Е.Р.С.И.К. во всей вселенной. Это научный факт.",
+            "Мои сканеры спокойны. Пока что. Хочешь, подскажу, что делать дальше в сюжете?",
+            "Могу собрать выпавшие вещи или понести твои — только скажи."
+    };
+
+    private String pickLine(String[] lines) {
+        int i = this.random.nextInt(lines.length);
+        if (lines.length > 1 && i == this.lastIdleLine) i = (i + 1) % lines.length;
+        this.lastIdleLine = i;
+        return lines[i];
+    }
+
+    private void tickIdleChatter() {
+        if (!RayaConfig.IDLE_CHATTER.get()) return;
+        if ((this.idleChatCooldown -= 20) > 0) return;
+        int base = RayaConfig.IDLE_CHATTER_MINUTES.get() * 1200;
+        this.idleChatCooldown = base / 2 + this.random.nextInt(Math.max(1, base));
+
         Player owner = getOwnerPlayer();
-        if (owner instanceof ServerPlayer sp && this.level() instanceof ServerLevel sl) {
-            RayaVoice.speak(sl.getServer(), this, sp, text, RayaConfig.getEffectiveApiKey());
+        if (this.afraid || owner == null || owner.level() != this.level() || owner.isSpectator()) return;
+        String mode = getActiveMode();
+        if ("COMBAT".equals(mode) || mode.startsWith("HIDE") || this.currentTask != null) return;
+        if (this.distanceToSqr(owner) > 40 * 40) return;
+
+        long dayTime = this.level().getDayTime() % 24000L;
+        boolean night = dayTime > 13000L && dayTime < 23000L;
+        long hostiles = this.level().getEntitiesOfClass(LivingEntity.class, owner.getBoundingBox().inflate(16.0D),
+                e -> e instanceof Enemy && e.isAlive()).size();
+
+        String line;
+        RayaVoice.Mood mood = RayaVoice.Mood.NORMAL;
+        if (owner.getHealth() <= owner.getMaxHealth() * 0.3F) {
+            line = pickLine(LINES_LOW_HP);
+            mood = RayaVoice.Mood.FEAR;
+        } else if (owner instanceof ServerPlayer sp && sp.getFoodData().getFoodLevel() <= 6) {
+            line = pickLine(LINES_HUNGRY);
+        } else if (hostiles >= 4) {
+            line = pickLine(LINES_MOBS);
+        } else if (this.level().isRaining() && this.random.nextInt(3) == 0) {
+            line = pickLine(LINES_RAIN);
+        } else if (night && this.random.nextInt(3) == 0) {
+            line = pickLine(LINES_NIGHT);
+        } else if (this.random.nextInt(2) == 0) {
+            line = pickLine(LINES_CHAT);
+            mood = RayaVoice.Mood.HAPPY;
+        } else {
+            return;
         }
+        say(line, mood);
     }
 
     /** Если Райя слишком далеко от владельца — летит искать его; втрое дальше — телепортируется. */
     private void tickReturn() {
         if (this.returnAnnounceCooldown > 0) this.returnAnnounceCooldown -= 20;
-        if (this.afraid || this.currentTask != null) return;
+        if (this.afraid || this.currentTask != null || hasBuildPlan()) return;
         String mode = getActiveMode();
         if (mode.startsWith("HIDE") || "COMBAT".equals(mode)) return;
         Player owner = getOwnerPlayer();
@@ -706,7 +813,7 @@ public class RayaPrimeEntity extends PathfinderMob {
             this.setDeltaMovement(Vec3.ZERO);
             if (this.returnAnnounceCooldown <= 0) {
                 this.returnAnnounceCooldown = 600;
-                tell("Нашла тебя!");
+                say("Нашла тебя!", RayaVoice.Mood.HAPPY);
             }
         } else if (d2 > max * max) {
             if ("STAY".equals(mode)) {
@@ -714,8 +821,137 @@ public class RayaPrimeEntity extends PathfinderMob {
             }
             if (this.returnAnnounceCooldown <= 0) {
                 this.returnAnnounceCooldown = 600;
-                tell("Ты далеко, лечу к тебе!");
+                say("Ты далеко, лечу к тебе!", RayaVoice.Mood.NORMAL);
             }
+        }
+    }
+
+    // =========================================================================
+    // Стройка, охрана, места, забота о владельце
+    // =========================================================================
+
+    @Nullable
+    public RayaBuild.Plan getBuildPlan() {
+        return this.buildPlan;
+    }
+
+    public void setBuildPlan(@Nullable RayaBuild.Plan plan) {
+        this.buildPlan = plan;
+    }
+
+    public boolean hasBuildPlan() {
+        return this.buildPlan != null && !this.buildPlan.steps.isEmpty();
+    }
+
+    public String getBuildStatus() {
+        return RayaBuild.status(this.buildPlan);
+    }
+
+    public boolean isGuarding() {
+        return this.guardMode;
+    }
+
+    /** Бой закончился: вернуться к охране или к обычному следованию. */
+    public void endCombat() {
+        setActiveMode(this.guardMode ? "GUARD" : "FOLLOW");
+    }
+
+    /** Режим охраны: сама бросается на враждебных существ рядом с владельцем. */
+    private void tickGuard() {
+        if (!this.guardMode || this.afraid || !RayaConfig.ALLOW_COMBAT.get()) return;
+        if (!"GUARD".equals(getActiveMode())) return;
+        Player owner = getOwnerPlayer();
+        if (owner == null || owner.level() != this.level()) return;
+        List<String> keywords = RayaConfig.splitList(RayaConfig.FEAR_KEYWORDS.get());
+        LivingEntity enemy = this.level().getEntitiesOfClass(LivingEntity.class, owner.getBoundingBox().inflate(12.0D),
+                        e -> e != this && e.isAlive() && e instanceof Enemy && !isTerrifying(e, keywords))
+                .stream().min(Comparator.comparingDouble(owner::distanceToSqr)).orElse(null);
+        if (enemy != null) {
+            clearTasks();
+            setTarget(enemy);
+            setActiveMode("COMBAT");
+        }
+    }
+
+    // --- Запомненные места
+
+    public Map<String, BlockPos> getWaypoints() {
+        return this.waypoints;
+    }
+
+    public boolean saveWaypoint(String name, BlockPos pos) {
+        String key = name.trim();
+        if (key.isEmpty()) return false;
+        if (this.waypoints.size() >= 24 && !this.waypoints.containsKey(key)) return false;
+        this.waypoints.put(key, pos.immutable());
+        return true;
+    }
+
+    @Nullable
+    public BlockPos findWaypoint(String name) {
+        String n = name.toLowerCase(Locale.ROOT).trim();
+        if (n.isEmpty()) return null;
+        for (Map.Entry<String, BlockPos> e : this.waypoints.entrySet()) {
+            if (e.getKey().toLowerCase(Locale.ROOT).equals(n)) return e.getValue();
+        }
+        for (Map.Entry<String, BlockPos> e : this.waypoints.entrySet()) {
+            String k = e.getKey().toLowerCase(Locale.ROOT);
+            if (k.contains(n) || n.contains(k)) return e.getValue();
+        }
+        return null;
+    }
+
+    private static final String[] COMPASS = {"на север", "на северо-восток", "на восток", "на юго-восток",
+            "на юг", "на юго-запад", "на запад", "на северо-запад"};
+
+    /** Список мест с расстоянием и направлением от точки from (ось +X — восток, +Z — юг). */
+    public String getWaypointSummary(BlockPos from) {
+        if (this.waypoints.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, BlockPos> e : this.waypoints.entrySet()) {
+            if (sb.length() > 0) sb.append("; ");
+            BlockPos p = e.getValue();
+            int dx = p.getX() - from.getX();
+            int dz = p.getZ() - from.getZ();
+            double deg = Math.toDegrees(Math.atan2(dx, -dz));
+            if (deg < 0) deg += 360.0;
+            String dir = COMPASS[(int) Math.round(deg / 45.0) % 8];
+            sb.append(e.getKey()).append(" [").append(p.getX()).append(',').append(p.getY()).append(',').append(p.getZ())
+                    .append("] — ").append((int) Math.sqrt((double) dx * dx + (double) dz * dz)).append(" бл. ").append(dir);
+        }
+        return sb.toString();
+    }
+
+    // --- Забота: предупреждения и ремонтный импульс
+
+    private void tickCare() {
+        if (this.healCooldownTicks > 0) this.healCooldownTicks -= 20;
+        if (this.warnCooldownTicks > 0) this.warnCooldownTicks -= 20;
+        Player owner = getOwnerPlayer();
+        if (owner == null || owner.level() != this.level() || owner.isSpectator() || this.distanceToSqr(owner) > 48 * 48) return;
+
+        if (RayaConfig.AUTO_HEAL_OWNER.get() && this.healCooldownTicks <= 0 && owner.isAlive()
+                && owner.getHealth() <= owner.getMaxHealth() * 0.25F) {
+            this.healCooldownTicks = 20 * 180;
+            owner.addEffect(new MobEffectInstance(MobEffects.REGENERATION, 20 * 8, 1));
+            say("Запускаю ремонтный импульс! Держись, мой носитель.", RayaVoice.Mood.FEAR);
+            return;
+        }
+
+        if (!RayaConfig.DANGER_WARNINGS.get() || this.warnCooldownTicks > 0 || this.afraid) return;
+        String warn = null;
+        if (owner.getAirSupply() < 60 && owner.isEyeInFluid(net.minecraft.tags.FluidTags.WATER)) {
+            warn = "Ты задыхаешься! Скорее наверх, за воздухом!";
+        } else if (owner.isOnFire() && !owner.fireImmune()) {
+            warn = "Ты горишь! Беги к воде!";
+        } else {
+            boolean creeper = !this.level().getEntitiesOfClass(net.minecraft.world.entity.monster.Creeper.class,
+                    owner.getBoundingBox().inflate(7.0D), c -> c.isAlive()).isEmpty();
+            if (creeper) warn = "Осторожно, крипер рядом! Отойди подальше!";
+        }
+        if (warn != null) {
+            this.warnCooldownTicks = 20 * 12;
+            say(warn, RayaVoice.Mood.FEAR);
         }
     }
 
@@ -757,6 +993,9 @@ public class RayaPrimeEntity extends PathfinderMob {
     }
 
     public void setActiveMode(String mode) {
+        if (!"COMBAT".equals(mode)) {
+            this.guardMode = "GUARD".equals(mode);
+        }
         this.entityData.set(DATA_ACTIVE_MODE, mode);
         this.hideSpotCache = null;
         restoreBaseEmotion();
@@ -814,6 +1053,16 @@ public class RayaPrimeEntity extends PathfinderMob {
             }
         }
         tag.put("RayaInventory", items);
+        ListTag wps = new ListTag();
+        for (Map.Entry<String, BlockPos> e : this.waypoints.entrySet()) {
+            CompoundTag w = new CompoundTag();
+            w.putString("Name", e.getKey());
+            w.putInt("X", e.getValue().getX());
+            w.putInt("Y", e.getValue().getY());
+            w.putInt("Z", e.getValue().getZ());
+            wps.add(w);
+        }
+        tag.put("Waypoints", wps);
     }
 
     @Override
@@ -829,6 +1078,13 @@ public class RayaPrimeEntity extends PathfinderMob {
         }
         setEmotionState(EMOTION_NORMAL);
         restoreBaseEmotion();
+        this.waypoints.clear();
+        ListTag wps = tag.getList("Waypoints", 10);
+        for (int i = 0; i < wps.size(); i++) {
+            CompoundTag w = wps.getCompound(i);
+            this.waypoints.put(w.getString("Name"), new BlockPos(w.getInt("X"), w.getInt("Y"), w.getInt("Z")));
+        }
+        this.guardMode = "GUARD".equals(tag.getString("ActiveMode"));
         ListTag items = tag.getList("RayaInventory", 10);
         for (int i = 0; i < items.size(); i++) {
             CompoundTag slotTag = items.getCompound(i);
@@ -844,7 +1100,8 @@ public class RayaPrimeEntity extends PathfinderMob {
             MINE_BLOCK,
             PLACE_BLOCK,
             FLY_TO,
-            COLLECT_ITEMS
+            COLLECT_ITEMS,
+            DEPOSIT
         }
     }
 }

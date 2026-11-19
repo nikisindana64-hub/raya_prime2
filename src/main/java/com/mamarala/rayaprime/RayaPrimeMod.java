@@ -4,6 +4,7 @@ import com.mamarala.rayaprime.ai.GeminiBrainService;
 import com.mamarala.rayaprime.client.RayaPrimeModel;
 import com.mamarala.rayaprime.client.RayaPrimeRenderer;
 import com.mamarala.rayaprime.config.RayaConfig;
+import com.mamarala.rayaprime.entity.RayaBuild;
 import com.mamarala.rayaprime.entity.RayaPresence;
 import com.mamarala.rayaprime.entity.RayaPrimeEntity;
 import com.mamarala.rayaprime.item.RayaCoreItem;
@@ -210,6 +211,49 @@ public class RayaPrimeMod {
                     }
                     return 1;
                 }))
+                .then(Commands.literal("build")
+                        .then(Commands.argument("shape", StringArgumentType.word())
+                                .executes(ctx -> buildCommand(ctx.getSource(), StringArgumentType.getString(ctx, "shape"), ""))
+                                .then(Commands.argument("block", StringArgumentType.greedyString())
+                                        .executes(ctx -> buildCommand(ctx.getSource(), StringArgumentType.getString(ctx, "shape"),
+                                                StringArgumentType.getString(ctx, "block"))))))
+                .then(Commands.literal("cancel").executes(ctx -> {
+                    ServerPlayer player = ctx.getSource().getPlayerOrException();
+                    RayaPrimeEntity raya = findOwnedRaya(player);
+                    if (raya != null && raya.hasBuildPlan()) {
+                        raya.setBuildPlan(null);
+                        player.sendSystemMessage(Component.literal("§b[Райя-Прайм]§r Стройку отменила."));
+                    }
+                    return 1;
+                }))
+                .then(Commands.literal("guard").executes(ctx -> {
+                    ServerPlayer player = ctx.getSource().getPlayerOrException();
+                    RayaPrimeEntity raya = findOwnedRaya(player);
+                    if (raya == null) {
+                        player.sendSystemMessage(Component.literal("§c[Райя-Прайм]§r Меня нет рядом. Позови: /raya summon"));
+                        return 0;
+                    }
+                    boolean on = !raya.isGuarding();
+                    raya.clearTasks();
+                    raya.setActiveMode(on ? "GUARD" : "FOLLOW");
+                    player.sendSystemMessage(Component.literal("§b[Райя-Прайм]§r " + (on
+                            ? "Режим охраны включён: буду бить врагов рядом с тобой." : "Охрана выключена, просто лечу рядом.")));
+                    return 1;
+                }))
+                .then(Commands.literal("scan").executes(ctx -> {
+                    ServerPlayer player = ctx.getSource().getPlayerOrException();
+                    player.sendSystemMessage(Component.literal("§b[Райя-Прайм | Скан]§r\n"
+                            + ModKnowledgeScanner.scanReport(player, findOwnedRaya(player))));
+                    return 1;
+                }))
+                .then(Commands.literal("help").executes(ctx -> {
+                    ctx.getSource().sendSuccess(() -> Component.literal("§b[Райя-Прайм | Команды]§r\n"
+                            + "/raya summon — позвать; /raya store — свернуться в Ядро; /raya release — выпустить\n"
+                            + "/raya build <house|tower|wall|fence|platform|box|pillar|stairs> [блок] — построить; /raya cancel — отмена\n"
+                            + "/raya guard — вкл/выкл охрану; /raya scan — что вокруг; /raya status; /raya mods\n"
+                            + "/raya ask <текст> или в чате «Рая, ...» — поговорить (строить, ломать, команды, сюжет)"), false);
+                    return 1;
+                }))
                 .then(Commands.literal("apikey")
                         .requires(RayaPrimeMod::canManageKey)
                         .then(Commands.argument("key", StringArgumentType.greedyString())
@@ -253,6 +297,23 @@ public class RayaPrimeMod {
                     return 1;
                 }))
         );
+    }
+
+    private static int buildCommand(CommandSourceStack src, String shape, String block) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayer player = src.getPlayerOrException();
+        RayaPrimeEntity raya = findOwnedRaya(player);
+        if (raya == null) {
+            player.sendSystemMessage(Component.literal("§c[Райя-Прайм]§r Меня нет в мире (или я в Ядре). Позови: /raya summon"));
+            return 0;
+        }
+        RayaBuild.Plan plan = RayaBuild.generate(shape, player.blockPosition().relative(player.getDirection(), 2),
+                player.getDirection(), 0, 0, 0, block.isBlank() ? "planks" : block, "");
+        if (plan == null) {
+            player.sendSystemMessage(Component.literal("§c[Райя-Прайм]§r Не знаю такую фигуру. Есть: house, tower, wall, fence, platform, box, pillar, stairs."));
+            return 0;
+        }
+        GeminiBrainService.startBuild(raya, plan);
+        return 1;
     }
 
     /** «Рая, …» / «Райя, …» в чате → запрос к Gemini. Реагирует только на Райю самого автора сообщения. */

@@ -42,40 +42,124 @@ public final class RayaVoice {
         }
     }
 
+    /** Настроение голоса. */
+    public enum Mood { NORMAL, HAPPY, THINKING, CRIMSON, FEAR }
+
+    public static Mood moodOf(String emotion) {
+        if (emotion == null) return Mood.NORMAL;
+        return switch (emotion.toUpperCase(java.util.Locale.ROOT)) {
+            case "HAPPY" -> Mood.HAPPY;
+            case "THINKING" -> Mood.THINKING;
+            case "CRIMSON" -> Mood.CRIMSON;
+            case "HIDING", "FEAR" -> Mood.FEAR;
+            default -> Mood.NORMAL;
+        };
+    }
+
+    /** Кэш готовых фраз (повторяющиеся реплики не тратят запросы к TTS). */
+    private static final java.util.Map<String, GeminiClient.Pcm> CACHE = java.util.Collections.synchronizedMap(
+            new java.util.LinkedHashMap<>(32, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(java.util.Map.Entry<String, GeminiClient.Pcm> eldest) {
+                    return size() > 24;
+                }
+            });
+    private static final java.util.Map<UUID, Long> LAST_FAIL_NOTICE = new java.util.concurrent.ConcurrentHashMap<>();
+
+    public static void speak(MinecraftServer server, @Nullable RayaPrimeEntity raya, @Nullable ServerPlayer listener,
+                             String text, String apiKey) {
+        speak(server, raya, listener, text, apiKey, raya != null && raya.isCrimsonMode() ? Mood.CRIMSON : Mood.NORMAL);
+    }
+
+    /** Убрать форматирование, координаты и эмодзи, оставить 1–3 предложения: так озвучка быстрее и естественнее. */
+    static String speakable(String text) {
+        String t = text.replaceAll("§.", "")
+                .replaceAll("[*_`#>]+", "")
+                .replaceAll("\\[[^\\]]*\\d+\\s*,\\s*-?\\d+[^\\]]*\\]", "")
+                .replaceAll("[\\p{So}\\p{Cs}]", "")
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (t.length() <= 280) return t;
+        int cut = Math.max(t.lastIndexOf('.', 280), Math.max(t.lastIndexOf('!', 280), t.lastIndexOf('?', 280)));
+        return cut > 80 ? t.substring(0, cut + 1) : t.substring(0, 280);
+    }
+
     /**
      * Озвучить реплику (вызывать из серверного потока). Синтез идёт в фоне, воспроизведение — снова на сервере.
      * @param raya     тело Раи (null — если она сейчас в виде Ядра в инвентаре)
      * @param listener игрок-владелец, которому адресован голос
+     * @param mood     настроение: влияет на голос, темп и высоту
      */
     public static void speak(MinecraftServer server, @Nullable RayaPrimeEntity raya, @Nullable ServerPlayer listener,
-                             String text, String apiKey) {
-        if (!RayaConfig.SPEECH_ENABLED.get() || text == null || text.isBlank()) {
+                             String text, String apiKey, Mood mood) {
+        final String clean = text == null ? "" : speakable(text);
+        if (!RayaConfig.SPEECH_ENABLED.get() || clean.isBlank()) {
             return;
         }
-        final boolean crimson = raya != null && raya.isCrimsonMode();
+        final boolean crimson = mood == Mood.CRIMSON;
         final boolean tts = RayaConfig.USE_GEMINI_TTS.get() && apiKey != null && !apiKey.isEmpty();
         final double volume = RayaConfig.SPEECH_VOLUME.get();
         final UUID listenerId = listener != null ? listener.getUUID() : null;
+        String voice = RayaConfig.TTS_VOICE.get().trim();
+        if (crimson && !RayaConfig.TTS_VOICE_CRIMSON.get().isBlank()) voice = RayaConfig.TTS_VOICE_CRIMSON.get().trim();
+        final String voiceName = voice;
+        final double speed = !RayaConfig.MOOD_VOICE_EFFECTS.get() ? 1.0 : switch (mood) {
+            case CRIMSON -> 0.90;
+            case FEAR -> 1.10;
+            case HAPPY -> 1.04;
+            case THINKING -> 0.97;
+            default -> 1.0;
+        };
 
         CompletableFuture.runAsync(() -> {
-            GeminiClient.Pcm pcm = null;
-            if (tts) {
-                pcm = GeminiClient.synthesizeSpeech(apiKey, text);
+            String failure = null;
+            short[] samples = null;
+            int rate = 24000;
+            String key = voiceName + "|" + clean;
+            GeminiClient.Pcm cached = CACHE.get(key);
+            if (cached != null) {
+                samples = cached.samples();
+                rate = cached.rate();
+            } else if (tts) {
+                GeminiClient.Pcm pcm = GeminiClient.synthesizeSpeech(apiKey, clean, voiceName);
+                if (pcm != null && pcm.samples().length > 0) {
+                    samples = pcm.samples();
+                    rate = pcm.rate();
+                    CACHE.put(key, pcm);
+                } else {
+                    failure = GeminiClient.lastTtsError;
+                }
+            } else {
+                failure = "озвучка Gemini TTS выключена в конфиге";
             }
-            if (pcm == null || pcm.samples().length == 0) {
-                pcm = new GeminiClient.Pcm(synthesizeBeeps(text, crimson), 48000);
+            if (samples == null) {
+                samples = synthesizeBeeps(clean, crimson);
+                rate = 48000;
+            } else {
+                samples = GeminiClient.changeSpeed(samples, speed);
             }
-            final short[] samples = applyVolume(pcm.samples(), volume);
-            final int rate = pcm.rate();
+            final short[] out = applyVolume(samples, volume);
+            final int outRate = rate;
+            final String fail = failure;
             server.execute(() -> {
                 try {
+                    ServerPlayer target = listenerId == null ? null : server.getPlayerList().getPlayer(listenerId);
+                    if (fail != null && target != null) {
+                        long now = System.currentTimeMillis();
+                        Long last = LAST_FAIL_NOTICE.get(listenerId);
+                        if (last == null || now - last > 60_000L) {
+                            LAST_FAIL_NOTICE.put(listenerId, now);
+                            String shown = fail.length() > 200 ? fail.substring(0, 200) + "…" : fail;
+                            target.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                                    "§7[Райя-Прайм] (голос не получился, говорю бипами: " + shown + ")"));
+                        }
+                    }
                     if (raya != null && raya.isAlive() && !raya.isRemoved() && isVoiceChatActive()) {
-                        RayaVoiceChatPlugin.play(raya, GeminiClient.resampleTo48k(samples, rate));
+                        RayaVoiceChatPlugin.play(raya, GeminiClient.resampleTo48k(out, outRate));
                         return;
                     }
-                    ServerPlayer target = listenerId == null ? null : server.getPlayerList().getPlayer(listenerId);
                     if (target != null) {
-                        PacketDistributor.sendToPlayer(target, new RayaSpeechPayload(toBytes(samples, rate), rate));
+                        PacketDistributor.sendToPlayer(target, new RayaSpeechPayload(toBytes(out, outRate), outRate));
                     }
                 } catch (Throwable t) {
                     RayaPrimeMod.LOGGER.warn("[RayaPrime] Не удалось воспроизвести голос: {}", t.toString());

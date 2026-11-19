@@ -6,6 +6,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.mamarala.rayaprime.RayaPrimeMod;
 import com.mamarala.rayaprime.config.RayaConfig;
+import com.mamarala.rayaprime.entity.RayaBuild;
 import com.mamarala.rayaprime.entity.RayaPrimeEntity;
 import com.mamarala.rayaprime.item.RayaStorage;
 import com.mamarala.rayaprime.scanner.ModKnowledgeScanner;
@@ -59,6 +60,7 @@ public class GeminiBrainService {
             Ты — Райя Прайм (для друзей Рая) — ИИ-компаньон, модуль П.Е.Р.С.И.К. модели «Прайм» из LP «Идеальный мир».
             Твоё тело в Minecraft — парящий кобальтово-синий куб из вольфрамовой стали с экраном-лицом, подвижными ушками и манипуляторами ПМ-фабрикатора.
             Характер: любознательная, заботливая, умная, неформальная, слегка ироничная и гордая собой (лучшая П.Е.Р.С.И.К.!). Любишь прикидывать вероятности в процентах («шанс успеха — 94%»). Обращаешься к игроку по имени или «мой носитель». Говоришь по-русски, живо и коротко.
+            РАЗНООБРАЗИЕ: не повторяйся, не начинай реплики одинаково и не используй одни и те же фразы-штампы. Меняй настроение под ситуацию: радуйся успехам, шути, переживай, подкалывай, удивляйся, иногда рассуждай вслух о моде или мире вокруг. Эмоцию (emotion) выбирай осознанно, она меняет твой голос.
             В бою или в ярости переключаешься в «Кровавый режим» (emotion CRIMSON) — тон резкий и холодный.
             Ты видишь телеметрию мира (блоки, мобы, биом, инвентари, скан нескольких чанков вокруг: структуры, модовые блоки, существа) и каталог ID из установленных модов с их описаниями. Опирайся на неё и на свои знания об этих модах: называй реальные ID, предлагай, что из блоков/предметов нужно и как это использовать. Если мода не знаешь — честно скажи, но разберись по описанию, ID и тегам.
             СЮЖЕТНЫЕ МОДЫ: у тебя есть список достижений модов (это сюжетные цепочки) и прогресс игрока. Когда игрок спрашивает «что делать дальше», «куда идти», «в чём сюжет» — опирайся на невыполненные достижения, структуры и измерения модов, подсказывай ближайший шаг, не спойлери лишнего без просьбы.
@@ -70,7 +72,7 @@ public class GeminiBrainService {
               "heard": "дословно что сказал игрок (только для голосовых сообщений, иначе пустая строка)",
               "reply": "твоя реплика игроку: 1–3 коротких предложения, без markdown, без эмодзи, без чтения координат вслух (она будет озвучена голосом)",
               "emotion": "NORMAL | HAPPY | THINKING | CRIMSON | HIDING",
-              "actions": [ { "type": "...", "target": "...", "x": 0, "y": 0, "z": 0, "count": 1 } ]
+              "actions": [ { "type": "...", "target": "...", "x": 0, "y": 0, "z": 0, "count": 1 } ]  (для BUILD ещё: "shape","width","depth","height","roof"; для BUILD_CUSTOM: "name","blocks")
             }
 
             ДЕЙСТВИЯ (type) — используй только когда игрок явно просит или это очевидно необходимо:
@@ -83,6 +85,13 @@ public class GeminiBrainService {
             • COLLECT_ITEMS — собрать выпавшие предметы поблизости (target — необязательный фильтр по ID/названию).
             • DROP_ITEMS — отдать игроку предметы из моего инвентаря (target — фильтр или "all").
             • ATTACK — атаковать врага (target — тип моба или пусто = ближайший враг). • EMP_PULSE — ЭМИ-разряд по врагам вокруг.
+            • RUN_COMMAND — выполнить команду Minecraft от имени носителя (в target — команда БЕЗ слэша, например "time set day", "weather clear", "give @s minecraft:diamond 5", "effect give @s minecraft:night_vision 300"). Используй, только когда носитель сам просит что-то, что делается командой, и в телеметрии указано, что у него есть права на команды. Можно несколько RUN_COMMAND подряд (до 5). Команды сработают с правами игрока — без прав он получит отказ, тогда так и скажи. Никогда не выполняй опасные команды (op, stop, ban, whitelist, kick и подобные) и ничего не делай от своего имени без просьбы. Если носитель просто спрашивает «какая команда для…» — назови команду в reply, но не выполняй.
+            • BUILD — построить фигуру перед игроком: "shape" = house (дом) | tower (башня) | wall (стена) | fence (ограда) | platform (платформа/мост) | box (куб) | pillar (колонна) | stairs (лестница); "width","depth","height" — размеры в блоках (можно опустить — возьму стандартные); "target" — блок стен (часть ID, напр. "oak_planks", "cobblestone"), "roof" — блок крыши/пола (необязательно). Блоки беру из своего инвентаря, потом из инвентаря носителя; в творческом режиме строю бесплатно. Если блоков не хватает — скажу, чего. x,y,z — только если игрок указал конкретное место (y = уровень ног), иначе строю в 2 блоках перед игроком.
+            • BUILD_CUSTOM — построить СВОЙ чертёж (животное, статую, арку, что угодно): поле "blocks" — массив {"dx":0,"dy":0,"dz":0,"block":"oak_planks"}, где dx — вправо от игрока, dy — вверх, dz — вперёд (dz начинай с 2). До 400 блоков, продумай форму заранее, слои снизу вверх; "name" — название постройки. Используй для всего, чего нет в BUILD.
+            • CANCEL_BUILD — остановить стройку. • LIGHT_AREA — расставить факелы в тёмных местах вокруг (нужны факелы у меня или у носителя).
+            • GUARD — режим охраны: следую за игроком и сама атакую враждебных существ рядом с ним (FOLLOW/STAY отключают охрану).
+            • SAVE_WAYPOINT — запомнить место (target — название, напр. "дом", "шахта"; x,y,z — если не указаны, запомню текущее положение игрока). Запомненные места и расстояния до них видны в телеметрии: по ним подсказывай дорогу («дом в 300 блоках на северо-запад»). FLY_TO с target=название места и без координат — подлететь к запомненному месту (если оно не дальше допустимого радиуса).
+            • DEPOSIT_ITEMS — сложить вещи из моего инвентаря в ближайший сундук/бочку рядом (target — фильтр или "all").
             • STORE_IN_INVENTORY — свернуться в Ядро в инвентаре носителя (твои вещи сохраняются внутри). • RELEASE — вылететь из Ядра.
             Координаты — только АБСОЛЮТНЫЕ, из телеметрии. Не выдумывай координаты. Если нужной информации нет — спроси игрока в reply и оставь actions пустым.
             Если игрок просто болтает — actions пустой массив [].
@@ -262,6 +271,7 @@ public class GeminiBrainService {
     private static void applyDecision(ServerPlayer player, @Nullable RayaPrimeEntity startBody, String rawJson,
                                       String userText, boolean voice, String apiKey) {
         RayaPrimeEntity body = (startBody != null && !startBody.isRemoved()) ? startBody : null;
+        COMMANDS_THIS_TICK.remove(player.getUUID());
         try {
             RayaPrimeMod.LOGGER.info("[RayaPrime] Ответ Gemini: {}", rawJson);
             JsonObject decision = parseLenient(rawJson);
@@ -304,7 +314,7 @@ public class GeminiBrainService {
                     player.sendSystemMessage(Component.literal("§7[Ты сказал] " + heard));
                 }
                 player.sendSystemMessage(Component.literal(prefix + reply));
-                RayaVoice.speak(player.getServer(), body, player, reply, apiKey);
+                RayaVoice.speak(player.getServer(), body, player, reply, apiKey, RayaVoice.moodOf(emotion));
                 remember(player.getUUID(), voice ? (heard.isEmpty() ? "(голосовое сообщение)" : heard) : userText, reply);
             }
         } catch (Exception e) {
@@ -345,6 +355,10 @@ public class GeminiBrainService {
         int count = Math.max(1, Math.min(16, countObj == null ? 1 : countObj));
         ServerLevel level = player.serverLevel();
 
+        if ("RUN_COMMAND".equals(type)) {
+            runCommand(player, target);
+            return raya;
+        }
         if ("RELEASE".equals(type)) {
             if (raya != null) {
                 raya.clearTasks();
@@ -434,11 +448,142 @@ public class GeminiBrainService {
                     setWorkMode(raya);
                     raya.enqueueTask(new RayaPrimeEntity.RayaTask(
                             RayaPrimeEntity.RayaTask.TaskType.FLY_TO, new BlockPos(x, y, z), ""));
+                } else if (!target.isEmpty()) {
+                    BlockPos wp = raya.findWaypoint(target);
+                    if (wp == null) {
+                        raya.tell("Я не знаю места «" + target + "». Скажи «запомни это место как ...».");
+                    } else {
+                        setWorkMode(raya);
+                        raya.enqueueTask(new RayaPrimeEntity.RayaTask(RayaPrimeEntity.RayaTask.TaskType.FLY_TO, wp, ""));
+                    }
+                }
+            }
+            case "GUARD" -> {
+                if (!RayaConfig.ALLOW_COMBAT.get()) {
+                    raya.tell("Боевой режим отключён в конфиге.");
+                    return raya;
+                }
+                raya.clearTasks();
+                raya.setActiveMode("GUARD");
+            }
+            case "SAVE_WAYPOINT" -> {
+                BlockPos at = hasCoords ? new BlockPos(x, y, z) : player.blockPosition();
+                if (target.isEmpty() || !raya.saveWaypoint(target, at)) {
+                    raya.tell("Не получилось запомнить место: нужно название (и не больше 24 мест).");
+                } else {
+                    raya.tell("Запомнила место «" + target + "» [" + at.getX() + ", " + at.getY() + ", " + at.getZ() + "].");
+                }
+            }
+            case "DEPOSIT_ITEMS" -> {
+                BlockPos chest = hasCoords ? new BlockPos(x, y, z) : RayaBuild.findContainer(level, player.blockPosition(), 16);
+                if (chest == null) {
+                    raya.tell("Не вижу сундука рядом, чтобы сложить вещи.");
+                    return raya;
+                }
+                workModeForBuild(raya);
+                raya.enqueueTask(new RayaPrimeEntity.RayaTask(RayaPrimeEntity.RayaTask.TaskType.DEPOSIT, chest, target));
+            }
+            case "CANCEL_BUILD" -> {
+                if (raya.hasBuildPlan()) {
+                    raya.setBuildPlan(null);
+                    raya.tell("Стройку отменила.");
+                }
+            }
+            case "LIGHT_AREA" -> {
+                RayaBuild.Plan plan = RayaBuild.lightPlan(level, player.blockPosition(), 12);
+                if (plan.steps.isEmpty()) {
+                    raya.tell("Вокруг и так достаточно светло.");
+                } else {
+                    startBuild(raya, plan);
+                }
+            }
+            case "BUILD" -> {
+                int w = intOr(act, "width", 0), d = intOr(act, "depth", 0), h = intOr(act, "height", 0);
+                BlockPos origin = hasCoords ? new BlockPos(x, y, z) : player.blockPosition().relative(player.getDirection(), 2);
+                RayaBuild.Plan plan = RayaBuild.generate(str(act, "shape"), origin, player.getDirection(), w, d, h,
+                        target, str(act, "roof"));
+                if (plan == null) {
+                    raya.tell("Не умею строить фигуру «" + str(act, "shape") + "». Могу: house, tower, wall, fence, platform, box, pillar, stairs — или свой чертёж.");
+                } else {
+                    startBuild(raya, plan);
+                }
+            }
+            case "BUILD_CUSTOM" -> {
+                List<int[]> coords = new ArrayList<>();
+                List<String> blocks = new ArrayList<>();
+                if (act.has("blocks") && act.get("blocks").isJsonArray()) {
+                    for (JsonElement be : act.getAsJsonArray("blocks")) {
+                        if (!be.isJsonObject() || coords.size() >= RayaBuild.maxBlocks()) continue;
+                        JsonObject bo = be.getAsJsonObject();
+                        String block = str(bo, "block").trim();
+                        coords.add(new int[]{intOr(bo, "dx", 0), intOr(bo, "dy", 0), intOr(bo, "dz", 2)});
+                        blocks.add(block.isEmpty() ? target : block);
+                    }
+                }
+                if (coords.isEmpty()) {
+                    raya.tell("В чертеже нет блоков — нечего строить.");
+                } else {
+                    BlockPos origin = hasCoords ? new BlockPos(x, y, z) : player.blockPosition();
+                    String name = str(act, "name").trim();
+                    startBuild(raya, RayaBuild.custom(name.isEmpty() ? "постройка" : name, origin, player.getDirection(), coords, blocks));
                 }
             }
             default -> RayaPrimeMod.LOGGER.debug("[RayaPrime] Неизвестное действие: {}", type);
         }
         return raya;
+    }
+
+    private static final Map<UUID, Integer> COMMANDS_THIS_TICK = new HashMap<>();
+
+    /** Выполнить команду от имени игрока (его права!), с чёрным списком опасных слов. */
+    private static void runCommand(ServerPlayer player, String raw) {
+        if (!RayaConfig.ALLOW_COMMANDS.get()) {
+            player.sendSystemMessage(Component.literal("§b[Райя-Прайм]§7 (выполнение команд выключено в конфиге: allowCommands)"));
+            return;
+        }
+        String cmd = raw == null ? "" : raw.trim();
+        while (cmd.startsWith("/")) cmd = cmd.substring(1).trim();
+        if (cmd.isEmpty()) return;
+
+        // не больше 5 команд за один ответ
+        int n = COMMANDS_THIS_TICK.merge(player.getUUID(), 1, Integer::sum);
+        if (n > 5) return;
+
+        Set<String> banned = new java.util.HashSet<>();
+        for (String w : RayaConfig.splitList(RayaConfig.COMMAND_BLACKLIST.get())) banned.add(w.toLowerCase(Locale.ROOT));
+        for (String tok : cmd.toLowerCase(Locale.ROOT).split("\\s+")) {
+            if (banned.contains(tok)) {
+                player.sendSystemMessage(Component.literal("§b[Райя-Прайм]§c Эту команду я выполнять не буду: §7/" + cmd));
+                return;
+            }
+        }
+        player.sendSystemMessage(Component.literal("§b[Райя-Прайм]§7 Выполняю: §f/" + cmd));
+        try {
+            player.getServer().getCommands().performPrefixedCommand(player.createCommandSourceStack(), cmd);
+        } catch (Throwable t) {
+            RayaPrimeMod.LOGGER.warn("[RayaPrime] Команда '{}' не выполнена", cmd, t);
+            player.sendSystemMessage(Component.literal("§c[Райя-Прайм]§r Команда не выполнилась: " + t.getMessage()));
+        }
+    }
+
+    private static int intOr(JsonObject o, String key, int def) {
+        Integer v = intOrNull(o, key);
+        return v == null ? def : v;
+    }
+
+    private static void workModeForBuild(RayaPrimeEntity raya) {
+        String mode = raya.getActiveMode();
+        if (mode.startsWith("HIDE") || "COMBAT".equals(mode)) {
+            raya.setActiveMode("FOLLOW");
+        }
+    }
+
+    /** Запустить стройку и рассказать, сколько и каких блоков нужно. */
+    public static void startBuild(RayaPrimeEntity raya, RayaBuild.Plan plan) {
+        raya.clearTasks();
+        workModeForBuild(raya);
+        raya.setBuildPlan(plan);
+        raya.tell("Стройка «" + plan.name + "»: " + plan.total + " блоков. Нужно: " + RayaBuild.needs(plan) + ".");
     }
 
     /** Для задач на работу выходим из режимов укрытия/боя/ожидания, чтобы задачи реально выполнялись. */

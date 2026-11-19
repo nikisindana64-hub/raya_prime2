@@ -20,12 +20,23 @@ public class RayaConfig {
     public static final ModConfigSpec.ConfigValue<String> TTS_MODEL;
     public static final ModConfigSpec.ConfigValue<String> TTS_FALLBACK_MODELS;
     public static final ModConfigSpec.ConfigValue<String> TTS_VOICE;
+    public static final ModConfigSpec.ConfigValue<String> TTS_VOICE_CRIMSON;
+    public static final ModConfigSpec.BooleanValue MOOD_VOICE_EFFECTS;
 
     public static final ModConfigSpec.BooleanValue ALLOW_BLOCK_BREAKING;
     public static final ModConfigSpec.BooleanValue ALLOW_BLOCK_PLACING;
     public static final ModConfigSpec.BooleanValue ALLOW_COMBAT;
     public static final ModConfigSpec.IntValue MAX_TASK_DISTANCE;
     public static final ModConfigSpec.IntValue RETURN_DISTANCE;
+    public static final ModConfigSpec.BooleanValue ALLOW_COMMANDS;
+    public static final ModConfigSpec.IntValue MAX_BUILD_BLOCKS;
+    public static final ModConfigSpec.BooleanValue BUILD_FROM_OWNER_INVENTORY;
+    public static final ModConfigSpec.BooleanValue FREE_BUILD_IN_CREATIVE;
+    public static final ModConfigSpec.BooleanValue AUTO_HEAL_OWNER;
+    public static final ModConfigSpec.BooleanValue DANGER_WARNINGS;
+    public static final ModConfigSpec.ConfigValue<String> COMMAND_BLACKLIST;
+    public static final ModConfigSpec.BooleanValue IDLE_CHATTER;
+    public static final ModConfigSpec.IntValue IDLE_CHATTER_MINUTES;
 
     public static final ModConfigSpec.BooleanValue FEAR_ENABLED;
     public static final ModConfigSpec.IntValue FEAR_RADIUS;
@@ -88,6 +99,12 @@ public class RayaConfig {
         TTS_VOICE = BUILDER
                 .comment("Имя голоса Gemini TTS: Aoede (лёгкий), Zephyr (яркий), Kore (твёрдый), Puck (бодрый), Charon, Gacrux и др.")
                 .define("ttsVoice", "Aoede");
+        TTS_VOICE_CRIMSON = BUILDER
+                .comment("Голос Раи в «Кровавом режиме» (бой). Пусто = обычный голос.")
+                .define("ttsVoiceCrimson", "Kore");
+        MOOD_VOICE_EFFECTS = BUILDER
+                .comment("Менять темп и высоту голоса по настроению: в бою ниже и медленнее, от страха выше и быстрее, от радости чуть бодрее.")
+                .define("moodVoiceEffects", true);
         BUILDER.pop();
 
         BUILDER.push("abilities");
@@ -107,6 +124,34 @@ public class RayaConfig {
                 .comment("Если Райя дальше этого расстояния от владельца (и не прячется/не работает) — она летит искать владельца.",
                         "Втрое дальше — телепортируется к нему.")
                 .defineInRange("returnDistance", 48, 16, 256);
+        MAX_BUILD_BLOCKS = BUILDER
+                .comment("Максимум блоков в одной стройке (дом, башня, чертёж).")
+                .defineInRange("maxBuildBlocks", 500, 20, 5000);
+        BUILD_FROM_OWNER_INVENTORY = BUILDER
+                .comment("Если у Раи нет нужных блоков, она берёт их из ТВОЕГО инвентаря (только когда строит по твоей просьбе).")
+                .define("buildFromOwnerInventory", true);
+        FREE_BUILD_IN_CREATIVE = BUILDER
+                .comment("В творческом режиме строит бесплатно, не тратя блоки.")
+                .define("freeBuildInCreative", true);
+        AUTO_HEAL_OWNER = BUILDER
+                .comment("Когда у владельца совсем мало здоровья, Райя раз в 3 минуты накладывает на него «регенерацию» (ремонтный импульс).")
+                .define("autoHealOwner", true);
+        DANGER_WARNINGS = BUILDER
+                .comment("Райя предупреждает голосом об опасности: крипер рядом, ты задыхаешься под водой, горишь.")
+                .define("dangerWarnings", true);
+        ALLOW_COMMANDS = BUILDER
+                .comment("Разрешить Рае выполнять команды Minecraft по просьбе владельца (/time, /give, /weather, /tp...).",
+                        "Команды выполняются с ПРАВАМИ САМОГО ИГРОКА: без прав оператора/читов опасные команды не сработают.")
+                .define("allowCommands", true);
+        COMMAND_BLACKLIST = BUILDER
+                .comment("Слова (через запятую), при наличии которых в команде Райя её НЕ выполняет, даже если у игрока есть права.")
+                .define("commandBlacklist", "op,deop,stop,ban,ban-ip,pardon,pardon-ip,whitelist,kick,save-off,save-on,save-all,publish,reload,perf,debug,transfer,apikey,defaultgamemode,setidletimeout,function,datapack,jfr");
+        IDLE_CHATTER = BUILDER
+                .comment("Райя иногда сама подаёт голос: замечает ночь, дождь, твоё здоровье, голод, комментирует происходящее.")
+                .define("idleChatter", true);
+        IDLE_CHATTER_MINUTES = BUILDER
+                .comment("Примерная пауза между её самостоятельными репликами (минуты).")
+                .defineInRange("idleChatterMinutes", 4, 1, 60);
         BUILDER.pop();
 
         BUILDER.push("fear");

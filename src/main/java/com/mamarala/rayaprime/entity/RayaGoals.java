@@ -106,7 +106,7 @@ public class RayaGoals {
         public void tick() {
             LivingEntity target = raya.getTarget();
             if (target == null || !target.isAlive()) {
-                raya.setActiveMode("FOLLOW");
+                raya.endCombat();
                 return;
             }
             raya.getLookControl().setLookAt(target, 30.0F, 30.0F);
@@ -173,7 +173,44 @@ public class RayaGoals {
                         raya.completeCurrentTask();
                     }
                 }
+                case DEPOSIT -> {
+                    if (RayaBuild.tickDeposit(raya, pos, task.filter())) {
+                        raya.completeCurrentTask();
+                    }
+                }
             }
+        }
+    }
+
+    /** Строительство по плану (дом, башня, чертёж Gemini, факелы). */
+    public static class RayaBuildGoal extends Goal {
+        private final RayaPrimeEntity raya;
+
+        public RayaBuildGoal(RayaPrimeEntity raya) {
+            this.raya = raya;
+            this.setFlags(EnumSet.of(Flag.MOVE, Flag.LOOK));
+        }
+
+        @Override
+        public boolean requiresUpdateEveryTick() {
+            return true;
+        }
+
+        @Override
+        public boolean canUse() {
+            if (!raya.hasBuildPlan() || raya.isAfraid()) return false;
+            String mode = raya.getActiveMode();
+            return !mode.startsWith("HIDE") && !"COMBAT".equals(mode);
+        }
+
+        @Override
+        public boolean canContinueToUse() {
+            return canUse();
+        }
+
+        @Override
+        public void tick() {
+            RayaBuild.tick(raya);
         }
     }
 

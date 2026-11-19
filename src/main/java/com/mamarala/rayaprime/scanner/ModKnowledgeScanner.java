@@ -527,6 +527,11 @@ public class ModKnowledgeScanner {
         return sb.toString();
     }
 
+    /** Отчёт о скане для команды /raya scan. */
+    public static String scanReport(ServerPlayer player, RayaPrimeEntity raya) {
+        return scanSurroundings(player.serverLevel(), player, raya);
+    }
+
     /**
      * Полная картина окружения игрока (и Раи, если у неё есть тело) — уходит Gemini вместе с каждым сообщением.
      * @param raya тело Раи; null, если она сейчас в виде Ядра в инвентаре
@@ -544,6 +549,9 @@ public class ModKnowledgeScanner {
         ctx.append(String.format("Носитель: %s | HP %.1f/%.1f | голод %d/20 | координаты [%d, %d, %d]\n",
                 player.getName().getString(), player.getHealth(), player.getMaxHealth(),
                 player.getFoodData().getFoodLevel(), player.getBlockX(), player.getBlockY(), player.getBlockZ()));
+
+        ctx.append("Права носителя на команды: ").append(player.hasPermissions(2)
+                ? "ЕСТЬ (оператор/читы) — RUN_COMMAND сработает" : "НЕТ — команды, требующие прав, будут отклонены").append('\n');
 
         List<String> hotbar = new ArrayList<>();
         for (int i = 0; i < 9; i++) {
@@ -575,6 +583,11 @@ public class ModKnowledgeScanner {
                     raya.getHealth(), raya.getMaxHealth(), raya.getActiveMode(),
                     raya.isAfraid() ? " (ТЕБЕ СТРАШНО: рядом опасное существо)" : "",
                     raya.getQueuedTaskCount(), raya.getBlockX(), raya.getBlockY(), raya.getBlockZ()));
+            if (raya.isGuarding()) ctx.append("Режим охраны включён: ты атакуешь врагов рядом с носителем.\n");
+            String bs = raya.getBuildStatus();
+            if (!bs.isEmpty()) ctx.append(bs).append('\n');
+            String wps = raya.getWaypointSummary(player.blockPosition());
+            if (!wps.isEmpty()) ctx.append("Запомненные места: ").append(wps).append('\n');
             SimpleContainer inv = raya.getRayaInventory();
             List<String> invItems = new ArrayList<>();
             for (int i = 0; i < inv.getContainerSize(); i++) {
