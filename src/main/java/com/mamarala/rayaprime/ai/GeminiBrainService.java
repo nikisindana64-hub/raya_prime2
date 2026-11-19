@@ -72,6 +72,7 @@ public class GeminiBrainService {
               "heard": "дословно что сказал игрок (только для голосовых сообщений, иначе пустая строка)",
               "reply": "твоя реплика игроку: 1–3 коротких предложения, без markdown, без эмодзи, без чтения координат вслух (она будет озвучена голосом)",
               "emotion": "NORMAL | HAPPY | THINKING | CRIMSON | HIDING",
+              "anim": "NONE | DANCE | SPIN | NOD | NO | WAVE   (необязательная анимация тела: радость — DANCE/SPIN, согласие — NOD, отказ — NO, приветствие/прощание — WAVE; не злоупотребляй)",
               "actions": [ { "type": "...", "target": "...", "x": 0, "y": 0, "z": 0, "count": 1 } ]  (для BUILD ещё: "shape","width","depth","height","roof"; для BUILD_CUSTOM: "name","blocks")
             }
 
@@ -79,7 +80,7 @@ public class GeminiBrainService {
             • FOLLOW — следовать за игроком (обычный режим). • STAY — остаться на месте.
             • HIDE_BEHIND_PLAYER — спрятаться за спиной игрока. • HIDE_BEHIND_BLOCKS — спрятаться за ближайшим укрытием из блоков.
             • MINE_BLOCK — сломать блок. Если известны координаты (например блок, на который смотрит игрок, или блок из телеметрии) — укажи x,y,z.
-              Иначе укажи target (часть ID или название, напр. "diamond_ore") и count (сколько ближайших блоков, до 16) — найду сама.
+              Иначе укажи target (часть ID или название, напр. "diamond_ore") и count (сколько ближайших блоков, до 48) — найду сама.
             • PLACE_BLOCK — поставить блок из МОЕГО инвентаря в точку x,y,z; target — какой блок (часть ID/названия). Без координат — перед игроком.
             • FLY_TO — подлететь в точку x,y,z.
             • COLLECT_ITEMS — собрать выпавшие предметы поблизости (target — необязательный фильтр по ID/названию).
@@ -92,6 +93,7 @@ public class GeminiBrainService {
             • GUARD — режим охраны: следую за игроком и сама атакую враждебных существ рядом с ним (FOLLOW/STAY отключают охрану).
             • SAVE_WAYPOINT — запомнить место (target — название, напр. "дом", "шахта"; x,y,z — если не указаны, запомню текущее положение игрока). Запомненные места и расстояния до них видны в телеметрии: по ним подсказывай дорогу («дом в 300 блоках на северо-запад»). FLY_TO с target=название места и без координат — подлететь к запомненному месту (если оно не дальше допустимого радиуса).
             • DEPOSIT_ITEMS — сложить вещи из моего инвентаря в ближайший сундук/бочку рядом (target — фильтр или "all").
+            • FIND_BLOCK — найти ближайший блок/руду в просканированных чанках вокруг и показать дорогу (target — часть ID или название, напр. "diamond_ore", "spawner"). Подлетаю к нему и называю координаты. Используй для «найди», «где ближайший…».
             • STORE_IN_INVENTORY — свернуться в Ядро в инвентаре носителя (твои вещи сохраняются внутри). • RELEASE — вылететь из Ядра.
             Координаты — только АБСОЛЮТНЫЕ, из телеметрии. Не выдумывай координаты. Если нужной информации нет — спроси игрока в reply и оставь actions пустым.
             Если игрок просто болтает — actions пустой массив [].
@@ -278,6 +280,7 @@ public class GeminiBrainService {
             String reply = str(decision, "reply").trim();
             String heard = str(decision, "heard").trim();
             String emotion = str(decision, "emotion").toUpperCase(Locale.ROOT);
+            int animId = RayaPrimeEntity.animIdByName(str(decision, "anim"));
 
             if (voice && reply.isEmpty() && !hasActions(decision)) {
                 if (body != null) body.restoreBaseEmotion(); // речь была не к Рае
@@ -294,6 +297,9 @@ public class GeminiBrainService {
                         RayaPrimeMod.LOGGER.warn("[RayaPrime] Не удалось выполнить действие {}", el, e);
                     }
                 }
+            }
+            if (body != null && animId != RayaPrimeEntity.ANIM_NONE) {
+                body.playAnimation(animId, RayaPrimeEntity.animDuration(animId));
             }
             if (body != null) {
                 switch (emotion) {
@@ -352,7 +358,7 @@ public class GeminiBrainService {
         Integer z = intOrNull(act, "z");
         boolean hasCoords = x != null && y != null && z != null && !(x == 0 && y == 0 && z == 0);
         Integer countObj = intOrNull(act, "count");
-        int count = Math.max(1, Math.min(16, countObj == null ? 1 : countObj));
+        int count = Math.max(1, Math.min(48, countObj == null ? 1 : countObj));
         ServerLevel level = player.serverLevel();
 
         if ("RUN_COMMAND".equals(type)) {
@@ -458,6 +464,23 @@ public class GeminiBrainService {
                     }
                 }
             }
+            case "FIND_BLOCK" -> {
+                BlockPos found = ModKnowledgeScanner.findNearestBlock(level, player.blockPosition(), target,
+                        RayaConfig.SCAN_RADIUS_CHUNKS.get());
+                if (found == null) {
+                    raya.tell("Не нашла «" + target + "» в просканированных чанках (радиус " + RayaConfig.SCAN_RADIUS_CHUNKS.get()
+                            + "). Подойди ближе к неизведанным местам или спроси про другой блок.");
+                } else {
+                    int dist = (int) Math.sqrt(found.distSqr(player.blockPosition()));
+                    raya.tell("Нашла «" + target + "»: [" + found.getX() + ", " + found.getY() + ", " + found.getZ()
+                            + "], в " + dist + " блоках от тебя. Лечу показать!");
+                    raya.playAnimation(RayaPrimeEntity.ANIM_WAVE, RayaPrimeEntity.animDuration(RayaPrimeEntity.ANIM_WAVE));
+                    if (raya.canActOn(found)) {
+                        setWorkMode(raya);
+                        raya.enqueueTask(new RayaPrimeEntity.RayaTask(RayaPrimeEntity.RayaTask.TaskType.FLY_TO, found, ""));
+                    }
+                }
+            }
             case "GUARD" -> {
                 if (!RayaConfig.ALLOW_COMBAT.get()) {
                     raya.tell("Боевой режим отключён в конфиге.");
@@ -499,9 +522,10 @@ public class GeminiBrainService {
             }
             case "BUILD" -> {
                 int w = intOr(act, "width", 0), d = intOr(act, "depth", 0), h = intOr(act, "height", 0);
+                String wallTarget = target.isBlank() ? RayaBuild.detectWall(raya, player) : target;
                 BlockPos origin = hasCoords ? new BlockPos(x, y, z) : player.blockPosition().relative(player.getDirection(), 2);
                 RayaBuild.Plan plan = RayaBuild.generate(str(act, "shape"), origin, player.getDirection(), w, d, h,
-                        target, str(act, "roof"));
+                        wallTarget, str(act, "roof"));
                 if (plan == null) {
                     raya.tell("Не умею строить фигуру «" + str(act, "shape") + "». Могу: house, tower, wall, fence, platform, box, pillar, stairs — или свой чертёж.");
                 } else {

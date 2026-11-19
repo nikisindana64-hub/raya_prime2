@@ -75,7 +75,16 @@ public class RayaPrimeEntity extends PathfinderMob {
     public static final int EMOTION_CRIMSON = 3;
     public static final int EMOTION_HIDING = 4;
 
-    private static final int MAX_QUEUED_TASKS = 16;
+    public static final int ANIM_NONE = 0;
+    public static final int ANIM_DANCE = 1;
+    public static final int ANIM_SPIN = 2;
+    public static final int ANIM_NOD = 3;
+    public static final int ANIM_NO = 4;
+    public static final int ANIM_WAVE = 5;
+    public static final int ANIM_WORK = 6;
+    public static final int ANIM_TREMBLE = 7;
+
+    private static final int MAX_QUEUED_TASKS = 48;
     private static final int TASK_TIMEOUT_TICKS = 20 * 45;
 
     private static final EntityDataAccessor<Optional<UUID>> DATA_OWNER_UUID =
@@ -85,6 +94,16 @@ public class RayaPrimeEntity extends PathfinderMob {
     // Режим: FOLLOW, STAY, HIDE_BEHIND_PLAYER, HIDE_BEHIND_BLOCKS, COMBAT
     private static final EntityDataAccessor<String> DATA_ACTIVE_MODE =
             SynchedEntityData.defineId(RayaPrimeEntity.class, EntityDataSerializers.STRING);
+
+    // Анимации: id, момент старта (игровое время, int) и длительность; «говорит» — до какого игрового времени
+    private static final EntityDataAccessor<Integer> DATA_ANIM =
+            SynchedEntityData.defineId(RayaPrimeEntity.class, EntityDataSerializers.INT);
+    private static final EntityDataAccessor<Integer> DATA_ANIM_START =
+            SynchedEntityData.defineId(RayaPrimeEntity.class, EntityDataSerializers.INT);
+    private static final EntityDataAccessor<Integer> DATA_ANIM_LEN =
+            SynchedEntityData.defineId(RayaPrimeEntity.class, EntityDataSerializers.INT);
+    private static final EntityDataAccessor<Integer> DATA_TALK_UNTIL =
+            SynchedEntityData.defineId(RayaPrimeEntity.class, EntityDataSerializers.INT);
 
     private final SimpleContainer inventory = new SimpleContainer(27);
     private final Queue<RayaTask> taskQueue = new ArrayDeque<>();
@@ -136,6 +155,10 @@ public class RayaPrimeEntity extends PathfinderMob {
         builder.define(DATA_OWNER_UUID, Optional.empty());
         builder.define(DATA_EMOTION_STATE, EMOTION_NORMAL);
         builder.define(DATA_ACTIVE_MODE, "FOLLOW");
+        builder.define(DATA_ANIM, ANIM_NONE);
+        builder.define(DATA_ANIM_START, 0);
+        builder.define(DATA_ANIM_LEN, 0);
+        builder.define(DATA_TALK_UNTIL, 0);
     }
 
     @Override
@@ -191,6 +214,7 @@ public class RayaPrimeEntity extends PathfinderMob {
             if (this.tickCount % 10 == 0) {
                 tickFear();
                 tickGuard();
+                tickAutoAnimation();
             }
             if (this.emotionTimer > 0 && --this.emotionTimer == 0) {
                 restoreBaseEmotion();
@@ -199,13 +223,16 @@ public class RayaPrimeEntity extends PathfinderMob {
                 tell("Не могу выполнить задачу — застряла. Отменяю.");
                 completeCurrentTask();
             }
-        } else if (this.tickCount % 3 == 0) {
-            this.level().addParticle(
-                    isCrimsonMode() ? ParticleTypes.FLAME : ParticleTypes.END_ROD,
-                    this.getX(), this.getY() - 0.05D, this.getZ(),
-                    (this.random.nextDouble() - 0.5D) * 0.02D,
-                    -0.03D,
-                    (this.random.nextDouble() - 0.5D) * 0.02D);
+        } else {
+            if (this.tickCount % 3 == 0) {
+                this.level().addParticle(
+                        isCrimsonMode() ? ParticleTypes.FLAME : ParticleTypes.END_ROD,
+                        this.getX(), this.getY() - 0.05D, this.getZ(),
+                        (this.random.nextDouble() - 0.5D) * 0.02D,
+                        -0.03D,
+                        (this.random.nextDouble() - 0.5D) * 0.02D);
+            }
+            clientAnimationParticles();
         }
     }
 
@@ -318,6 +345,9 @@ public class RayaPrimeEntity extends PathfinderMob {
     /** Сказать в чат И голосом. */
     public void say(String text, RayaVoice.Mood mood) {
         tell(text);
+        if (mood == RayaVoice.Mood.HAPPY && !isAnimActive() && this.random.nextInt(3) == 0) {
+            playAnimation(ANIM_WAVE, animDuration(ANIM_WAVE));
+        }
         Player owner = getOwnerPlayer();
         if (owner instanceof ServerPlayer sp && this.level() instanceof ServerLevel sl) {
             RayaVoice.speak(sl.getServer(), this, sp, text, RayaConfig.getEffectiveApiKey(), mood);
@@ -823,6 +853,105 @@ public class RayaPrimeEntity extends PathfinderMob {
                 this.returnAnnounceCooldown = 600;
                 say("Ты далеко, лечу к тебе!", RayaVoice.Mood.NORMAL);
             }
+        }
+    }
+
+    // =========================================================================
+    // Анимации
+    // =========================================================================
+
+    public int getAnimId() {
+        return this.entityData.get(DATA_ANIM);
+    }
+
+    public int getAnimLen() {
+        return this.entityData.get(DATA_ANIM_LEN);
+    }
+
+    /** Сколько тиков прошло с начала анимации (работает и на клиенте). */
+    public int getAnimElapsed() {
+        return (int) this.level().getGameTime() - this.entityData.get(DATA_ANIM_START);
+    }
+
+    public boolean isAnimActive() {
+        return getAnimId() != ANIM_NONE && getAnimElapsed() >= 0 && getAnimElapsed() < getAnimLen();
+    }
+
+    public boolean isTalking() {
+        return (int) this.level().getGameTime() < this.entityData.get(DATA_TALK_UNTIL);
+    }
+
+    public void playAnimation(int id, int ticks) {
+        this.entityData.set(DATA_ANIM, id);
+        this.entityData.set(DATA_ANIM_START, (int) this.level().getGameTime());
+        this.entityData.set(DATA_ANIM_LEN, Math.max(4, ticks));
+    }
+
+    /** Короткий взмах манипулятором при установке блока. */
+    public void playBuildSwing() {
+        if (!isAnimActive() || getAnimId() == ANIM_WORK) {
+            playAnimation(ANIM_WORK, 8);
+        }
+    }
+
+    public void setTalkTicks(int ticks) {
+        this.entityData.set(DATA_TALK_UNTIL, (int) this.level().getGameTime() + Math.max(0, ticks));
+    }
+
+    /** Название анимации из ответа Gemini → id (0, если неизвестно). */
+    public static int animIdByName(String name) {
+        if (name == null) return ANIM_NONE;
+        return switch (name.toUpperCase(Locale.ROOT).trim()) {
+            case "DANCE" -> ANIM_DANCE;
+            case "SPIN" -> ANIM_SPIN;
+            case "NOD", "YES" -> ANIM_NOD;
+            case "NO", "SHAKE" -> ANIM_NO;
+            case "WAVE" -> ANIM_WAVE;
+            default -> ANIM_NONE;
+        };
+    }
+
+    public static int animDuration(int id) {
+        return switch (id) {
+            case ANIM_DANCE -> 80;
+            case ANIM_SPIN -> 24;
+            case ANIM_NOD -> 24;
+            case ANIM_NO -> 24;
+            case ANIM_WAVE -> 40;
+            default -> 20;
+        };
+    }
+
+    /** Страх — дрожит; работает — стучит манипуляторами; иногда без дела сама покрутится или помашет. */
+    private void tickAutoAnimation() {
+        if (isAnimActive() && getAnimId() != ANIM_WORK && getAnimId() != ANIM_TREMBLE) return;
+        if (this.afraid) {
+            if (getAnimId() != ANIM_TREMBLE || !isAnimActive()) playAnimation(ANIM_TREMBLE, 24);
+        } else if (hasBuildPlan() || (this.currentTask != null
+                && (this.currentTask.type() == RayaTask.TaskType.MINE_BLOCK || this.currentTask.type() == RayaTask.TaskType.PLACE_BLOCK))) {
+            if (!isAnimActive()) playAnimation(ANIM_WORK, 12);
+        } else if (!isAnimActive() && this.random.nextInt(450) == 0 && "FOLLOW".equals(getActiveMode())) {
+            int[] pool = {ANIM_SPIN, ANIM_WAVE, ANIM_NOD};
+            int id = pool[this.random.nextInt(pool.length)];
+            playAnimation(id, animDuration(id));
+        }
+    }
+
+    private void clientAnimationParticles() {
+        int anim = isAnimActive() ? getAnimId() : ANIM_NONE;
+        if (isTalking() && this.tickCount % 8 == 0) {
+            this.level().addParticle(ParticleTypes.NOTE, this.getX(), this.getY() + 0.9D, this.getZ(),
+                    this.random.nextDouble(), 0.0D, 0.0D);
+        }
+        if (anim == ANIM_DANCE && this.tickCount % 4 == 0) {
+            this.level().addParticle(ParticleTypes.HAPPY_VILLAGER,
+                    this.getX() + (this.random.nextDouble() - 0.5D) * 0.8D, this.getY() + 0.7D,
+                    this.getZ() + (this.random.nextDouble() - 0.5D) * 0.8D, 0.0D, 0.02D, 0.0D);
+        }
+        if (anim == ANIM_WORK && this.tickCount % 2 == 0) {
+            this.level().addParticle(ParticleTypes.ELECTRIC_SPARK,
+                    this.getX() + (this.random.nextDouble() - 0.5D) * 0.7D, this.getY() + 0.3D,
+                    this.getZ() + (this.random.nextDouble() - 0.5D) * 0.7D, 0.0D, 0.0D, 0.0D);
         }
     }
 

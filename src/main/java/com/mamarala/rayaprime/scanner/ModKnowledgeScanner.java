@@ -527,6 +527,47 @@ public class ModKnowledgeScanner {
         return sb.toString();
     }
 
+    /** Ближайший блок по части ID/названия среди загруженных чанков в радиусе radiusChunks; null, если нет. */
+    public static BlockPos findNearestBlock(ServerLevel level, BlockPos origin, String filterRaw, int radiusChunks) {
+        if (filterRaw == null || filterRaw.isBlank()) return null;
+        final String f = filterRaw.toLowerCase(Locale.ROOT).trim();
+        Map<BlockState, Boolean> cache = new IdentityHashMap<>();
+        java.util.function.Predicate<BlockState> pred = s -> cache.computeIfAbsent(s, st -> {
+            if (st.isAir()) return false;
+            ResourceLocation k = BuiltInRegistries.BLOCK.getKey(st.getBlock());
+            return k.toString().contains(f) || st.getBlock().getName().getString().toLowerCase(Locale.ROOT).contains(f);
+        });
+        ChunkPos cp = new ChunkPos(origin);
+        BlockPos best = null;
+        double bestD = Double.MAX_VALUE;
+        for (int cx = cp.x - radiusChunks; cx <= cp.x + radiusChunks; cx++) {
+            for (int cz = cp.z - radiusChunks; cz <= cp.z + radiusChunks; cz++) {
+                LevelChunk chunk = level.getChunkSource().getChunkNow(cx, cz);
+                if (chunk == null) continue;
+                LevelChunkSection[] sections = chunk.getSections();
+                for (int i = 0; i < sections.length; i++) {
+                    LevelChunkSection sec = sections[i];
+                    if (sec == null || sec.hasOnlyAir() || !sec.maybeHas(pred)) continue;
+                    int baseY = SectionPos.sectionToBlockCoord(chunk.getSectionYFromSectionIndex(i));
+                    for (int x = 0; x < 16; x++) {
+                        for (int y = 0; y < 16; y++) {
+                            for (int z = 0; z < 16; z++) {
+                                if (!pred.test(sec.getBlockState(x, y, z))) continue;
+                                BlockPos pos = new BlockPos((cx << 4) + x, baseY + y, (cz << 4) + z);
+                                double d = pos.distSqr(origin);
+                                if (d < bestD) {
+                                    bestD = d;
+                                    best = pos;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
     /** Отчёт о скане для команды /raya scan. */
     public static String scanReport(ServerPlayer player, RayaPrimeEntity raya) {
         return scanSurroundings(player.serverLevel(), player, raya);

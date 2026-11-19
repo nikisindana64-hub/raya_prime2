@@ -89,6 +89,7 @@ public class RayaPrimeModel extends EntityModel<RayaPrimeEntity> {
     public void setupAnim(RayaPrimeEntity entity, float limbSwing, float limbSwingAmount,
                           float ageInTicks, float netHeadYaw, float headPitch) {
         // Плавное парение (левитация) вверх-вниз
+        this.root.x = 0.0F;
         this.root.y = 16.0F + Mth.sin(ageInTicks * 0.12F) * 1.4F;
         this.coreCube.yRot = netHeadYaw * ((float) Math.PI / 180F);
         this.coreCube.xRot = headPitch * ((float) Math.PI / 180F) + Mth.cos(ageInTicks * 0.08F) * 0.05F;
@@ -112,6 +113,63 @@ public class RayaPrimeModel extends EntityModel<RayaPrimeEntity> {
         // Движение манипуляторов ПМ-фабрикатора
         this.leftArm.xRot = Mth.sin(ageInTicks * 0.2F) * 0.15F;
         this.rightArm.xRot = -Mth.sin(ageInTicks * 0.2F) * 0.15F;
+        this.leftArm.zRot = 0.0F;
+        this.rightArm.zRot = 0.0F;
+        this.coreCube.zRot = 0.0F;
+
+        // Наклон корпуса вперёд при движении
+        this.coreCube.xRot += Mth.clamp(limbSwingAmount, 0.0F, 1.0F) * 0.35F;
+
+        // Говорит: ушки подрагивают, корпус чуть пульсирует, жестикулирует манипуляторами
+        if (entity.isTalking()) {
+            float talk = ageInTicks * 0.9F;
+            this.leftEar.zRot += Mth.sin(talk) * 0.18F;
+            this.rightEar.zRot -= Mth.sin(talk) * 0.18F;
+            this.root.y += Mth.sin(talk * 0.7F) * 0.5F;
+            this.leftArm.xRot += Mth.sin(talk * 0.5F) * 0.3F;
+            this.rightArm.xRot -= Mth.sin(talk * 0.5F + 1.0F) * 0.3F;
+        }
+
+        // Особые анимации (танец, вращение, кивок, отрицание, приветствие, работа, дрожь)
+        if (entity.isAnimActive()) {
+            int len = Math.max(1, entity.getAnimLen());
+            float t = entity.getAnimElapsed() + (ageInTicks - (float) Math.floor(ageInTicks));
+            float p = Mth.clamp(t / len, 0.0F, 1.0F);
+            switch (entity.getAnimId()) {
+                case RayaPrimeEntity.ANIM_DANCE -> {
+                    this.root.y -= Math.abs(Mth.sin(t * 0.5F)) * 3.0F;
+                    this.coreCube.zRot = Mth.sin(t * 0.4F) * 0.35F;
+                    this.coreCube.yRot += Mth.sin(t * 0.2F) * 0.6F;
+                    this.leftEar.zRot = 0.6F + Mth.sin(t * 0.8F) * 0.5F;
+                    this.rightEar.zRot = -0.6F - Mth.sin(t * 0.8F) * 0.5F;
+                    this.leftArm.xRot = Mth.sin(t * 0.6F) * 1.2F;
+                    this.rightArm.xRot = -Mth.sin(t * 0.6F) * 1.2F;
+                }
+                case RayaPrimeEntity.ANIM_SPIN -> {
+                    this.coreCube.yRot += p * ((float) Math.PI * 2.0F);
+                    this.leftEar.zRot = 0.7F;
+                    this.rightEar.zRot = -0.7F;
+                }
+                case RayaPrimeEntity.ANIM_NOD -> this.coreCube.xRot += Mth.sin(t * 0.7F) * 0.4F * (1.0F - p);
+                case RayaPrimeEntity.ANIM_NO -> this.coreCube.yRot += Mth.sin(t * 0.9F) * 0.5F * (1.0F - p);
+                case RayaPrimeEntity.ANIM_WAVE -> {
+                    this.rightArm.zRot = -2.2F + Mth.sin(t * 0.8F) * 0.4F;
+                    this.rightArm.xRot = 0.0F;
+                    this.coreCube.zRot = 0.1F;
+                }
+                case RayaPrimeEntity.ANIM_WORK -> {
+                    this.leftArm.xRot = -1.0F + Mth.sin(t * 1.2F) * 0.8F;
+                    this.rightArm.xRot = -1.0F - Mth.sin(t * 1.2F) * 0.8F;
+                    this.coreCube.xRot += 0.2F;
+                }
+                case RayaPrimeEntity.ANIM_TREMBLE -> {
+                    this.root.x = Mth.sin(t * 2.5F) * 0.4F;
+                    this.leftEar.zRot = 1.15F;
+                    this.rightEar.zRot = -1.15F;
+                }
+                default -> { }
+            }
+        }
     }
 
     @Override

@@ -22,6 +22,7 @@ public class RayaConfig {
     public static final ModConfigSpec.ConfigValue<String> TTS_VOICE;
     public static final ModConfigSpec.ConfigValue<String> TTS_VOICE_CRIMSON;
     public static final ModConfigSpec.BooleanValue MOOD_VOICE_EFFECTS;
+    public static final ModConfigSpec.BooleanValue TTS_STYLE;
 
     public static final ModConfigSpec.BooleanValue ALLOW_BLOCK_BREAKING;
     public static final ModConfigSpec.BooleanValue ALLOW_BLOCK_PLACING;
@@ -102,6 +103,9 @@ public class RayaConfig {
         TTS_VOICE_CRIMSON = BUILDER
                 .comment("Голос Раи в «Кровавом режиме» (бой). Пусто = обычный голос.")
                 .define("ttsVoiceCrimson", "Kore");
+        TTS_STYLE = BUILDER
+                .comment("Передавать TTS манеру речи по настроению (весело, холодно, испуганно) — поддерживают модели gemini-3.8-*-tts.")
+                .define("ttsStyle", true);
         MOOD_VOICE_EFFECTS = BUILDER
                 .comment("Менять темп и высоту голоса по настроению: в бою ниже и медленнее, от страха выше и быстрее, от радости чуть бодрее.")
                 .define("moodVoiceEffects", true);
@@ -126,7 +130,7 @@ public class RayaConfig {
                 .defineInRange("returnDistance", 48, 16, 256);
         MAX_BUILD_BLOCKS = BUILDER
                 .comment("Максимум блоков в одной стройке (дом, башня, чертёж).")
-                .defineInRange("maxBuildBlocks", 500, 20, 5000);
+                .defineInRange("maxBuildBlocks", 800, 20, 5000);
         BUILD_FROM_OWNER_INVENTORY = BUILDER
                 .comment("Если у Раи нет нужных блоков, она берёт их из ТВОЕГО инвентаря (только когда строит по твоей просьбе).")
                 .define("buildFromOwnerInventory", true);

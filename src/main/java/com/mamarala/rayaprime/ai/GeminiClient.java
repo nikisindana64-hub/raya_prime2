@@ -26,7 +26,8 @@ public final class GeminiClient {
             .version(HttpClient.Version.HTTP_1_1) // HTTP/2 через некоторые VPN/прокси зависает
             .build();
     private static final Gson GSON = new Gson();
-    private static final String BASE = "https://generativelanguage.googleapis.com/v1beta/models/";
+    private static final String BASE_ROOT = "https://generativelanguage.googleapis.com/v1beta/";
+    private static final String BASE = BASE_ROOT + "models/";
 
     private GeminiClient() {}
 
@@ -41,8 +42,12 @@ public final class GeminiClient {
 
     /** Один запрос generateContent. Возвращает тело ответа как JsonObject. */
     private static JsonObject post(String model, String apiKey, JsonObject payload, int timeoutSec) throws Exception {
+        return postTo(BASE + model + ":generateContent", model, apiKey, payload, timeoutSec);
+    }
+
+    private static JsonObject postTo(String url, String model, String apiKey, JsonObject payload, int timeoutSec) throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(BASE + model + ":generateContent"))
+                .uri(URI.create(url))
                 .header("Content-Type", "application/json; charset=UTF-8")
                 .header("x-goog-api-key", apiKey)
                 .timeout(Duration.ofSeconds(timeoutSec))
@@ -153,6 +158,7 @@ public final class GeminiClient {
     /** Моно PCM 16 бит со своей частотой дискретизации. */
     public record Pcm(short[] samples, int rate) {}
 
+    /** Старый интерфейс (generateContent): для gemini-3.1-flash-tts-preview и 2.5-*-tts. Транскрипт отделён маркером, чтобы инструкции не зачитывались. */
     private static JsonObject ttsPayload(String text, String voice, boolean newShape) {
         JsonObject payload = new JsonObject();
         JsonArray contents = new JsonArray();
@@ -160,8 +166,8 @@ public final class GeminiClient {
         c.addProperty("role", "user");
         JsonArray parts = new JsonArray();
         JsonObject tp = new JsonObject();
-        // Только сам текст: модели TTS зачитывают ВСЁ, что им дали (включая «скажи весело:»)
-        tp.addProperty("text", text);
+        tp.addProperty("text", "Synthesize speech. Speak ONLY the text after the TRANSCRIPT marker, nothing else, "
+                + "in a friendly, lively voice.\n\n#### TRANSCRIPT\n" + text);
         parts.add(tp);
         c.add("parts", parts);
         contents.add(c);
@@ -186,57 +192,143 @@ public final class GeminiClient {
         return payload;
     }
 
+    /** Новый интерфейс (Interactions API) для gemini-3.x-tts: транскрипт строго дословный, стиль — в аннотации. */
+    private static JsonObject interactionsTtsPayload(String model, String text, String voice, String style) {
+        JsonObject textPart = new JsonObject();
+        textPart.addProperty("type", "text");
+        textPart.addProperty("text", text);
+        if (style != null && !style.isBlank()) {
+            JsonObject ann = new JsonObject();
+            ann.addProperty("type", "speech_metadata");
+            ann.addProperty("style", style);
+            JsonArray anns = new JsonArray();
+            anns.add(ann);
+            textPart.add("annotations", anns);
+        }
+        JsonArray content = new JsonArray();
+        content.add(textPart);
+        JsonObject userInput = new JsonObject();
+        userInput.addProperty("type", "user_input");
+        userInput.add("content", content);
+        JsonArray input = new JsonArray();
+        input.add(userInput);
+
+        JsonObject payload = new JsonObject();
+        payload.addProperty("model", model);
+        payload.add("input", input);
+        JsonObject respFormat = new JsonObject();
+        respFormat.addProperty("type", "audio");
+        payload.add("response_format", respFormat);
+        JsonObject voiceObj = new JsonObject();
+        voiceObj.addProperty("voice", voice);
+        JsonArray speechCfg = new JsonArray();
+        speechCfg.add(voiceObj);
+        JsonObject gen = new JsonObject();
+        gen.add("speech_config", speechCfg);
+        payload.add("generation_config", gen);
+        return payload;
+    }
+
+    /** Ищет в ответе Interactions API аудио: объект с "type":"audio" и строкой "data" (base64). */
+    private static Pcm extractInteractionAudio(JsonElement el, String model) {
+        String data = findAudioData(el);
+        if (data == null) return null;
+        Pcm pcm = parseAudio(Base64.getDecoder().decode(data), 24000);
+        RayaPrimeMod.LOGGER.info("[RayaPrime] TTS/interactions ({}): {} сэмплов, {} Гц", model, pcm.samples().length, pcm.rate());
+        return pcm;
+    }
+
+    private static String findAudioData(JsonElement el) {
+        if (el == null) return null;
+        String found = null;
+        if (el.isJsonObject()) {
+            JsonObject o = el.getAsJsonObject();
+            if (o.has("type") && o.get("type").isJsonPrimitive() && "audio".equals(o.get("type").getAsString())
+                    && o.has("data") && o.get("data").isJsonPrimitive()) {
+                found = o.get("data").getAsString();
+            }
+            for (String k : o.keySet()) {
+                String inner = findAudioData(o.get(k));
+                if (inner != null) found = inner; // берём последний (как в документации)
+            }
+        } else if (el.isJsonArray()) {
+            for (JsonElement e : el.getAsJsonArray()) {
+                String inner = findAudioData(e);
+                if (inner != null) found = inner;
+            }
+        }
+        return found;
+    }
+
     /** Причина последней неудачи TTS (для диагностики в чате), null если всё хорошо. */
     public static volatile String lastTtsError = null;
 
     public static Pcm synthesizeSpeech(String apiKey, String text) {
-        return synthesizeSpeech(apiKey, text, RayaConfig.TTS_VOICE.get().trim());
+        return synthesizeSpeech(apiKey, text, RayaConfig.TTS_VOICE.get().trim(), "");
     }
 
-    /** Синтез речи Gemini TTS. Возвращает PCM (обычно 24 кГц) или null при неудаче. Вызывать из фонового потока. */
-    public static Pcm synthesizeSpeech(String apiKey, String text, String voice) {
+    /**
+     * Синтез речи Gemini TTS. Возвращает PCM (обычно 24 кГц) или null при неудаче. Вызывать из фонового потока.
+     * @param style описание манеры речи по-английски ("cheerful"), пусто — без стиля
+     */
+    public static Pcm synthesizeSpeech(String apiKey, String text, String voice, String style) {
         if (voice == null || voice.isBlank()) voice = RayaConfig.TTS_VOICE.get().trim();
         StringBuilder errors = new StringBuilder();
         boolean newShape = false; // запоминаем форму voiceConfig, которая сработала
         for (String model : modelChain(RayaConfig.TTS_MODEL.get().trim(), RayaConfig.TTS_FALLBACK_MODELS.get())) {
-            for (int attempt = 0; attempt < 3; attempt++) {
-                try {
-                    JsonObject resp = post(model, apiKey, ttsPayload(text, voice, newShape), 45);
-                    Pcm pcm = extractAudio(resp, model);
-                    if (pcm != null) {
-                        lastTtsError = null;
-                        return pcm;
+            // gemini-3.x-tts живут в Interactions API; если там отказ — пробуем старый generateContent
+            boolean tryInteractions = model.startsWith("gemini-3");
+            for (int mode = tryInteractions ? 0 : 1; mode < 2; mode++) {
+                boolean interactions = mode == 0;
+                boolean next = false;
+                for (int attempt = 0; attempt < 3 && !next; attempt++) {
+                    try {
+                        Pcm pcm;
+                        if (interactions) {
+                            JsonObject resp = postTo(BASE_ROOT + "interactions", model, apiKey,
+                                    interactionsTtsPayload(model, text, voice, style), 45);
+                            pcm = extractInteractionAudio(resp, model);
+                        } else {
+                            JsonObject resp = post(model, apiKey, ttsPayload(text, voice, newShape), 45);
+                            pcm = extractAudio(resp, model);
+                        }
+                        if (pcm != null && pcm.samples().length > 0) {
+                            lastTtsError = null;
+                            return pcm;
+                        }
+                        errors.append(" [").append(model).append(interactions ? "/int" : "/gen").append("] пустой ответ;");
+                        next = true;
+                    } catch (GeminiException e) {
+                        RayaPrimeMod.LOGGER.warn("[RayaPrime] TTS {} (попытка {}): {}", interactions ? "interactions" : "generateContent", attempt + 1, e.getMessage());
+                        if (e.status == 401 || e.status == 403) {
+                            lastTtsError = "ключ не подходит для TTS (HTTP " + e.status + ")";
+                            return null;
+                        }
+                        if (!interactions && e.status == 400 && attempt == 0) {
+                            newShape = !newShape; // возможно, другая форма voiceConfig
+                            continue;
+                        }
+                        if ((e.status == 429 || e.status == 500 || e.status == 503) && attempt < 2) {
+                            sleepQuietly(e.status == 429 ? 4000L : 1500L * (attempt + 1)); // лимит/перегрузка — подождать
+                            continue;
+                        }
+                        String m = String.valueOf(e.getMessage()).replace('\n', ' ');
+                        errors.append(" [").append(model).append(interactions ? "/int" : "/gen").append("] ")
+                                .append(m.length() > 170 ? m.substring(0, 170) + "…" : m).append(';');
+                        next = true;
+                    } catch (java.io.IOException e) {
+                        RayaPrimeMod.LOGGER.warn("[RayaPrime] TTS сеть ({}): {}", model, e.toString());
+                        if (attempt < 1) {
+                            sleepQuietly(800L);
+                            continue;
+                        }
+                        errors.append(" [").append(model).append("] сеть ").append(e.getClass().getSimpleName()).append(';');
+                        next = true;
+                    } catch (Exception e) {
+                        RayaPrimeMod.LOGGER.warn("[RayaPrime] TTS не удался на модели {}: {}", model, e.toString());
+                        errors.append(" [").append(model).append("] ").append(e.getClass().getSimpleName()).append(';');
+                        next = true;
                     }
-                    errors.append(" ").append(model).append(": пустой ответ;");
-                    break;
-                } catch (GeminiException e) {
-                    RayaPrimeMod.LOGGER.warn("[RayaPrime] TTS (попытка {}): {}", attempt + 1, e.getMessage());
-                    if (e.status == 401 || e.status == 403) {
-                        lastTtsError = "ключ не подходит для TTS (HTTP " + e.status + ")";
-                        return null;
-                    }
-                    if (e.status == 400 && attempt == 0) {
-                        newShape = !newShape; // возможно, другая форма voiceConfig
-                        continue;
-                    }
-                    if ((e.status == 429 || e.status == 500 || e.status == 503) && attempt < 2) {
-                        sleepQuietly(e.status == 429 ? 4000L : 1500L * (attempt + 1)); // лимит запросов/перегрузка — подождать
-                        continue;
-                    }
-                    errors.append(" ").append(model).append(": HTTP ").append(e.status).append(';');
-                    break;
-                } catch (java.io.IOException e) {
-                    RayaPrimeMod.LOGGER.warn("[RayaPrime] TTS сеть ({}): {}", model, e.toString());
-                    if (attempt < 1) {
-                        sleepQuietly(800L);
-                        continue;
-                    }
-                    errors.append(" ").append(model).append(": сеть ").append(e.getClass().getSimpleName()).append(';');
-                    break;
-                } catch (Exception e) {
-                    RayaPrimeMod.LOGGER.warn("[RayaPrime] TTS не удался на модели {}: {}", model, e.toString());
-                    errors.append(" ").append(model).append(": ").append(e.getClass().getSimpleName()).append(';');
-                    break;
                 }
             }
         }

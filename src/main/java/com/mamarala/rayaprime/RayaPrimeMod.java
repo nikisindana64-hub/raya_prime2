@@ -217,6 +217,19 @@ public class RayaPrimeMod {
                                 .then(Commands.argument("block", StringArgumentType.greedyString())
                                         .executes(ctx -> buildCommand(ctx.getSource(), StringArgumentType.getString(ctx, "shape"),
                                                 StringArgumentType.getString(ctx, "block"))))))
+                .then(Commands.literal("say")
+                        .then(Commands.argument("text", StringArgumentType.greedyString()).executes(ctx -> {
+                            ServerPlayer player = ctx.getSource().getPlayerOrException();
+                            com.mamarala.rayaprime.voice.RayaVoice.diagnose(ctx.getSource().getServer(), player,
+                                    StringArgumentType.getString(ctx, "text"), true, RayaConfig.getEffectiveApiKey());
+                            return 1;
+                        })))
+                .then(Commands.literal("voicetest").executes(ctx -> {
+                    ServerPlayer player = ctx.getSource().getPlayerOrException();
+                    com.mamarala.rayaprime.voice.RayaVoice.diagnose(ctx.getSource().getServer(), player,
+                            "Проверка звука", false, "");
+                    return 1;
+                }))
                 .then(Commands.literal("cancel").executes(ctx -> {
                     ServerPlayer player = ctx.getSource().getPlayerOrException();
                     RayaPrimeEntity raya = findOwnedRaya(player);
@@ -250,6 +263,7 @@ public class RayaPrimeMod {
                     ctx.getSource().sendSuccess(() -> Component.literal("§b[Райя-Прайм | Команды]§r\n"
                             + "/raya summon — позвать; /raya store — свернуться в Ядро; /raya release — выпустить\n"
                             + "/raya build <house|tower|wall|fence|platform|box|pillar|stairs> [блок] — построить; /raya cancel — отмена\n"
+                            + "/raya say <текст> — проверка голоса Gemini; /raya voicetest — проверка звука на ПК\n"
                             + "/raya guard — вкл/выкл охрану; /raya scan — что вокруг; /raya status; /raya mods\n"
                             + "/raya ask <текст> или в чате «Рая, ...» — поговорить (строить, ломать, команды, сюжет)"), false);
                     return 1;
@@ -307,7 +321,7 @@ public class RayaPrimeMod {
             return 0;
         }
         RayaBuild.Plan plan = RayaBuild.generate(shape, player.blockPosition().relative(player.getDirection(), 2),
-                player.getDirection(), 0, 0, 0, block.isBlank() ? "planks" : block, "");
+                player.getDirection(), 0, 0, 0, block.isBlank() ? RayaBuild.detectWall(raya, player) : block, "");
         if (plan == null) {
             player.sendSystemMessage(Component.literal("§c[Райя-Прайм]§r Не знаю такую фигуру. Есть: house, tower, wall, fence, platform, box, pillar, stairs."));
             return 0;

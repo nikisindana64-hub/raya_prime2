@@ -131,6 +131,18 @@ public class RayaVoiceChatPlugin implements VoicechatPlugin {
         return serverApi != null;
     }
 
+    /** Игрок реально подключён к голосовому чату (иначе 3D-звук он не услышит — используем прямую отправку). */
+    public static boolean isConnected(UUID playerUuid) {
+        VoicechatServerApi api = serverApi;
+        if (api == null || playerUuid == null) return false;
+        try {
+            VoicechatConnection c = api.getConnectionOf(playerUuid);
+            return c != null && c.isConnected();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     /** Проиграть PCM (48 кГц, 16 бит, моно) как 3D-звук от тела Раи. Вызывать из серверного потока. */
     public static void play(RayaPrimeEntity raya, short[] pcm48k) {
         VoicechatServerApi api = serverApi;

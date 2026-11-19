@@ -23,22 +23,32 @@ import net.minecraft.world.phys.Vec3;
 import javax.annotation.Nullable;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
 /**
- * Строительство Раи: план из блоков (дом, башня, стена, платформа, лестница, забор, свой чертёж от Gemini),
- * расстановка факелов и раскладка вещей по сундукам.
+ * Строительство Раи: план из блоков (дом со скатной крышей, башня, стена, платформа, пирамида, лестница, забор,
+ * свой чертёж от Gemini), расстановка факелов и раскладка вещей по сундукам.
  * Блоки берутся из инвентаря Раи, затем (если разрешено) из инвентаря владельца; в творческом режиме — бесплатно.
+ *
+ * Материал шага — цепочка вариантов через «|»: пробуется по порядку ("oak_stairs|oak_planks").
+ * Вариант с «~» в начале берётся только у самой Раи (украшения: мебель, факелы), не из инвентаря владельца.
  */
 public final class RayaBuild {
 
     private RayaBuild() {}
 
-    /** Один блок плана. block — часть ID/названия ("" = любой строительный блок); fallback — запасной блок. */
-    public record Step(BlockPos pos, String block, @Nullable String fallback) {}
+    /**
+     * Один блок плана.
+     * @param chain    цепочка материалов
+     * @param facing   горизонтальное направление при установке (ступени, двери, сундуки), null — без ориентации
+     * @param optional если материала нет — молча пропустить (двери, окна, мебель), а не ждать
+     */
+    public record Step(BlockPos pos, String chain, @Nullable Direction facing, boolean optional) {}
 
     public static final class Plan {
         public final ArrayDeque<Step> steps = new ArrayDeque<>();
@@ -50,6 +60,8 @@ public final class RayaBuild {
         int skipped;
         long lastNoMaterialMsg = -10000;
         String missing = "";
+        /** Какой конкретный блок уже выбран для варианта (чтобы стены не получались из разных досок). */
+        final Map<String, String> resolved = new HashMap<>();
 
         public Plan(String name) {
             this.name = name;
@@ -64,10 +76,77 @@ public final class RayaBuild {
             Direction right = fwd.getClockWise();
             return origin.relative(right, rx).relative(Direction.UP, ry).relative(fwd, rz);
         }
+
+        Direction right() {
+            return fwd.getClockWise();
+        }
+
+        Direction left() {
+            return fwd.getCounterClockWise();
+        }
     }
 
     public static int maxBlocks() {
         return RayaConfig.MAX_BUILD_BLOCKS.get();
+    }
+
+    private static Step st(BlockPos p, String chain) {
+        return new Step(p, chain, null, false);
+    }
+
+    private static Step opt(BlockPos p, String chain, @Nullable Direction facing) {
+        return new Step(p, chain, facing, true);
+    }
+
+    // ------------------------------------------------------------------ палитра
+
+    /** Набор материалов под основной блок стен: из «oak_planks» выводятся «oak_log», «oak_stairs», «oak_door». */
+    private record Palette(String wall, String pillar, String stairs, String door, String base) {
+        static Palette of(String wallRaw) {
+            String f = wallRaw == null ? "" : wallRaw.toLowerCase(Locale.ROOT).trim();
+            if (f.isEmpty()) f = "planks";
+            if (f.startsWith("minecraft:")) f = f.substring(10);
+            if (f.endsWith("_planks")) {
+                String wood = f.substring(0, f.length() - 7);
+                return new Palette(f, wood + "_log|" + f, wood + "_stairs|" + f, wood + "_door|door", "~cobblestone|" + f);
+            }
+            if (f.equals("planks")) {
+                return new Palette(f, "log|" + f, "stairs|" + f, "door", "~cobblestone|" + f);
+            }
+            // каменные и прочие: cobblestone → cobblestone_stairs, stone_bricks → stone_brick_stairs
+            String single = f.endsWith("bricks") ? f.substring(0, f.length() - 1) : f;
+            String stairs = f + "_stairs|" + single + "_stairs|" + f;
+            return new Palette(f, f, stairs, "door", f);
+        }
+    }
+
+    /** Подходящий основной блок по тому, что реально лежит у Раи и владельца (больше всего штук). */
+    public static String detectWall(RayaPrimeEntity raya, @Nullable Player owner) {
+        Map<String, Integer> totals = new HashMap<>();
+        collectBuildBlocks(contents(raya.getRayaInventory()), totals);
+        if (owner != null && RayaConfig.BUILD_FROM_OWNER_INVENTORY.get()) {
+            collectBuildBlocks(owner.getInventory().items, totals);
+        }
+        String best = null;
+        int bestCount = 0;
+        for (Map.Entry<String, Integer> e : totals.entrySet()) {
+            if (e.getValue() > bestCount) {
+                bestCount = e.getValue();
+                best = e.getKey();
+            }
+        }
+        return best == null ? "planks" : best;
+    }
+
+    private static void collectBuildBlocks(List<ItemStack> stacks, Map<String, Integer> totals) {
+        for (ItemStack s : stacks) {
+            if (s.isEmpty() || !(s.getItem() instanceof BlockItem)) continue;
+            String path = BuiltInRegistries.ITEM.getKey(s.getItem()).getPath();
+            boolean good = path.endsWith("_planks") || path.equals("cobblestone") || path.equals("stone")
+                    || path.endsWith("bricks") || path.equals("sandstone") || path.equals("smooth_stone")
+                    || path.equals("deepslate_bricks") || path.equals("cobbled_deepslate") || path.equals("mud_bricks");
+            if (good) totals.merge(path, s.getCount(), Integer::sum);
+        }
     }
 
     // ------------------------------------------------------------------ генерация фигур
@@ -80,48 +159,42 @@ public final class RayaBuild {
                                 String wall, String roof) {
         String shape = shapeRaw == null ? "" : shapeRaw.toLowerCase(Locale.ROOT).trim();
         Frame f = new Frame(origin, fwd);
-        String wallBlock = (wall == null || wall.isBlank()) ? "planks" : wall.trim(); // без названия — доски, а не что попало
-        String roofBlock = (roof == null || roof.isBlank()) ? wallBlock : roof.trim();
+        Palette pal = Palette.of(wall);
+        String wallBlock = pal.wall();
         List<Step> out = new ArrayList<>();
         String name;
 
         switch (shape) {
-            case "house", "hut", "home", "дом", "домик" -> {
+            case "house", "hut", "home", "cabin", "дом", "домик" -> {
                 name = "дом";
-                int ww = clamp(w, 3, 15, 7), dd = clamp(d, 3, 15, 7), hh = clamp(h, 3, 8, 3);
-                int lo = -((ww - 1) / 2), hi = ww / 2;
-                for (int y = -1; y <= hh; y++) {
-                    for (int rx = lo; rx <= hi; rx++) {
-                        for (int rz = 0; rz < dd; rz++) {
-                            boolean edge = rx == lo || rx == hi || rz == 0 || rz == dd - 1;
-                            if (y == -1) {
-                                out.add(new Step(f.at(rx, y, rz), wallBlock, null));
-                            } else if (y == hh) {
-                                out.add(new Step(f.at(rx, y, rz), roofBlock, wallBlock));
-                            } else if (edge) {
-                                if (rz == 0 && rx == 0 && y <= 1) continue; // дверной проём 1×2
-                                boolean corner = (rx == lo || rx == hi) && (rz == 0 || rz == dd - 1);
-                                boolean window = y == 1 && hh >= 3 && !corner && ((rx + rz) % 3 == 0)
-                                        && !(rz == 0 && Math.abs(rx) <= 1);
-                                out.add(new Step(f.at(rx, y, rz), window ? "glass" : wallBlock, window ? wallBlock : null));
-                            }
-                        }
-                    }
-                }
+                int ww = clamp(w, 3, 11, 7), dd = clamp(d, 3, 11, 7), hh = clamp(h, 3, 7, 4);
+                houseSteps(out, f, pal, roof, ww, dd, hh);
             }
             case "tower", "башня" -> {
                 name = "башня";
                 int ww = clamp(w, 3, 7, 3), hh = clamp(h, 3, 32, 10);
                 int lo = -((ww - 1) / 2), hi = ww / 2;
+                int c = (ww - 1) / 2;
                 for (int y = -1; y < hh; y++) {
                     for (int rx = lo; rx <= hi; rx++) {
                         for (int rz = 0; rz < ww; rz++) {
                             boolean edge = rx == lo || rx == hi || rz == 0 || rz == ww - 1;
-                            if (y == -1 || edge) {
-                                if (y >= 0 && rz == 0 && rx == 0 && y <= 1) continue;
-                                out.add(new Step(f.at(rx, y, rz), wallBlock, null));
+                            if (y == -1) {
+                                out.add(st(f.at(rx, y, rz), wallBlock));
+                            } else if (edge) {
+                                if (rz == 0 && rx == 0 && y <= 1) continue; // вход
+                                boolean slit = y % 4 == 2 && y > 2 && ww >= 3
+                                        && ((rx == 0 && (rz == 0 || rz == ww - 1)) || (rz == c && (rx == lo || rx == hi)));
+                                out.add(slit ? opt(f.at(rx, y, rz), "glass_pane", null) : st(f.at(rx, y, rz), (rx == lo || rx == hi) && (rz == 0 || rz == ww - 1) ? pal.pillar() : wallBlock));
                             }
                         }
+                    }
+                }
+                // зубцы наверху
+                for (int rx = lo; rx <= hi; rx++) {
+                    for (int rz = 0; rz < ww; rz++) {
+                        boolean edge = rx == lo || rx == hi || rz == 0 || rz == ww - 1;
+                        if (edge && (rx + rz) % 2 == 0) out.add(st(f.at(rx, hh, rz), wallBlock));
                     }
                 }
             }
@@ -130,7 +203,7 @@ public final class RayaBuild {
                 int ww = clamp(w, 1, 40, 7), hh = clamp(h, 1, 12, 3);
                 int lo = -((ww - 1) / 2), hi = ww / 2;
                 for (int y = 0; y < hh; y++) {
-                    for (int rx = lo; rx <= hi; rx++) out.add(new Step(f.at(rx, y, 0), wallBlock, null));
+                    for (int rx = lo; rx <= hi; rx++) out.add(st(f.at(rx, y, 0), wallBlock));
                 }
             }
             case "fence", "pen", "забор" -> {
@@ -141,7 +214,7 @@ public final class RayaBuild {
                     for (int rx = lo; rx <= hi; rx++) {
                         for (int rz = 0; rz < dd; rz++) {
                             boolean edge = rx == lo || rx == hi || rz == 0 || rz == dd - 1;
-                            if (edge) out.add(new Step(f.at(rx, y, rz), wallBlock, null));
+                            if (edge) out.add(st(f.at(rx, y, rz), wallBlock));
                         }
                     }
                 }
@@ -151,7 +224,7 @@ public final class RayaBuild {
                 int ww = clamp(w, 1, 25, 5), dd = clamp(d, 1, 40, 5);
                 int lo = -((ww - 1) / 2), hi = ww / 2;
                 for (int rz = 0; rz < dd; rz++) {
-                    for (int rx = lo; rx <= hi; rx++) out.add(new Step(f.at(rx, -1, rz), wallBlock, null));
+                    for (int rx = lo; rx <= hi; rx++) out.add(st(f.at(rx, -1, rz), wallBlock));
                 }
             }
             case "box", "cube", "куб", "блок" -> {
@@ -160,21 +233,34 @@ public final class RayaBuild {
                 int lo = -((ww - 1) / 2), hi = ww / 2;
                 for (int y = 0; y < hh; y++) {
                     for (int rz = 0; rz < dd; rz++) {
-                        for (int rx = lo; rx <= hi; rx++) out.add(new Step(f.at(rx, y, rz), wallBlock, null));
+                        for (int rx = lo; rx <= hi; rx++) out.add(st(f.at(rx, y, rz), wallBlock));
+                    }
+                }
+            }
+            case "pyramid", "пирамида" -> {
+                name = "пирамида";
+                int ww = clamp(w, 3, 17, 9);
+                int layers = (ww + 1) / 2;
+                for (int i = 0; i < layers; i++) {
+                    int size = ww - 2 * i;
+                    int lo = -((size - 1) / 2), hi = size / 2;
+                    int zOff = i;
+                    for (int rz = 0; rz < size; rz++) {
+                        for (int rx = lo; rx <= hi; rx++) out.add(st(f.at(rx, i, rz + zOff), wallBlock));
                     }
                 }
             }
             case "pillar", "column", "колонна", "столб" -> {
                 name = "колонна";
                 int hh = clamp(h, 1, 40, 5);
-                for (int y = 0; y < hh; y++) out.add(new Step(f.at(0, y, 0), wallBlock, null));
+                for (int y = 0; y < hh; y++) out.add(st(f.at(0, y, 0), wallBlock));
             }
             case "stairs", "staircase", "лестница" -> {
                 name = "лестница";
                 int hh = clamp(h, 1, 30, 6);
                 for (int i = 0; i < hh; i++) {
-                    out.add(new Step(f.at(0, i, i), wallBlock, null));
-                    out.add(new Step(f.at(-1, i, i), wallBlock, null));
+                    out.add(st(f.at(0, i, i), wallBlock));
+                    out.add(st(f.at(-1, i, i), wallBlock));
                 }
             }
             default -> {
@@ -184,6 +270,95 @@ public final class RayaBuild {
         return finish(name, out);
     }
 
+    /** Дом: пол, каменный цоколь, угловые брёвна, окна, дверь, скатная крыша из ступеней, фронтоны, факелы и мебель. */
+    private static void houseSteps(List<Step> out, Frame f, Palette pal, @Nullable String roofRaw, int ww, int dd, int hh) {
+        int lo = -((ww - 1) / 2), hi = ww / 2;
+        String wall = pal.wall();
+        String stairs = (roofRaw == null || roofRaw.isBlank()) ? pal.stairs() : Palette.of(roofRaw).stairs();
+        String roofFill = (roofRaw == null || roofRaw.isBlank()) ? wall : Palette.of(roofRaw).wall();
+
+        // сколько и где окна
+        int c = (dd - 1) / 2;
+        List<Integer> sideWin = new ArrayList<>();
+        sideWin.add(c);
+        if (dd >= 9) {
+            sideWin.add(c - 3);
+            sideWin.add(c + 3);
+        }
+        List<Integer> fbWin = new ArrayList<>();
+        if (ww >= 7) {
+            fbWin.add(-2);
+            fbWin.add(2);
+        }
+        boolean tall = hh >= 4;
+
+        // пол
+        for (int rz = 0; rz < dd; rz++) {
+            for (int rx = lo; rx <= hi; rx++) out.add(st(f.at(rx, -1, rz), wall));
+        }
+        // стены
+        for (int y = 0; y < hh; y++) {
+            for (int rx = lo; rx <= hi; rx++) {
+                for (int rz = 0; rz < dd; rz++) {
+                    boolean edge = rx == lo || rx == hi || rz == 0 || rz == dd - 1;
+                    if (!edge) continue;
+                    boolean corner = (rx == lo || rx == hi) && (rz == 0 || rz == dd - 1);
+                    if (rz == 0 && rx == 0) {
+                        if (y == 0) out.add(new Step(f.at(rx, y, rz), pal.door(), f.fwd(), true));
+                        continue; // проём двери 1×2
+                    }
+                    if (corner) {
+                        out.add(st(f.at(rx, y, rz), pal.pillar()));
+                        continue;
+                    }
+                    boolean winY = y == 1 || (tall && y == 2);
+                    boolean window = winY && (((rx == lo || rx == hi) && sideWin.contains(rz))
+                            || ((rz == 0 || rz == dd - 1) && fbWin.contains(rx))
+                            || (rz == dd - 1 && ww >= 5 && rx == 0));
+                    if (window) {
+                        out.add(st(f.at(rx, y, rz), "glass_pane|glass|" + wall));
+                    } else if (y == 0) {
+                        out.add(st(f.at(rx, y, rz), pal.base()));
+                    } else {
+                        out.add(st(f.at(rx, y, rz), wall));
+                    }
+                }
+            }
+        }
+        // скатная крыша: ступени с краёв к коньку, свес по бокам
+        for (int k = 0; ; k++) {
+            int left = lo - 1 + k, right = hi + 1 - k;
+            int y = hh - 1 + k;
+            if (left > right) break;
+            if (left == right) { // конёк
+                for (int rz = 0; rz < dd; rz++) out.add(st(f.at(left, y, rz), roofFill));
+                break;
+            }
+            for (int rz = 0; rz < dd; rz++) {
+                out.add(new Step(f.at(left, y, rz), stairs, f.right(), false));
+                out.add(new Step(f.at(right, y, rz), stairs, f.left(), false));
+            }
+            // фронтоны: треугольник между ступенями на торцевых стенах
+            if (k >= 1) {
+                for (int rx = left + 1; rx <= right - 1; rx++) {
+                    out.add(st(f.at(rx, y, 0), wall));
+                    if (dd > 1) out.add(st(f.at(rx, y, dd - 1), wall));
+                }
+            }
+        }
+        // факелы и мебель — только если они есть у самой Раи (или в креативе)
+        if (ww >= 5 && dd >= 5) {
+            out.add(opt(f.at(lo + 1, 0, 1), "~torch", null));
+            out.add(opt(f.at(hi - 1, 0, 1), "~torch", null));
+            out.add(opt(f.at(lo + 1, 0, dd - 2), "~torch", null));
+            out.add(opt(f.at(hi - 1, 0, dd - 2), "~crafting_table", null));
+            out.add(opt(f.at(hi - 2, 0, dd - 2), "~furnace", f.fwd()));
+            out.add(opt(f.at(lo + 2, 0, dd - 2), "~chest", f.fwd()));
+        }
+        // порядок: снизу вверх (стабильная сортировка сохраняет порядок обхода внутри слоя)
+        out.sort(Comparator.comparingInt(s -> s.pos().getY()));
+    }
+
     /** Свой чертёж: список блоков в локальных координатах (dx вправо, dy вверх, dz вперёд). */
     public static Plan custom(String name, BlockPos origin, Direction fwd, List<int[]> coords, List<String> blocks) {
         Frame f = new Frame(origin, fwd);
@@ -191,9 +366,9 @@ public final class RayaBuild {
         for (int i = 0; i < coords.size(); i++) {
             int[] c = coords.get(i);
             String b = blocks.get(i);
-            out.add(new Step(f.at(c[0], c[1], c[2]), b == null || b.isBlank() ? "planks" : b, null));
+            out.add(st(f.at(c[0], c[1], c[2]), b == null || b.isBlank() ? "planks" : b));
         }
-        out.sort((a, b) -> Integer.compare(a.pos().getY(), b.pos().getY()));
+        out.sort(Comparator.comparingInt(s -> s.pos().getY()));
         return finish(name, out);
     }
 
@@ -221,7 +396,7 @@ public final class RayaBuild {
             }
         }
         List<Step> out = new ArrayList<>();
-        for (BlockPos p : placed) out.add(new Step(p, "torch", null));
+        for (BlockPos p : placed) out.add(st(p, "torch"));
         return finish("освещение", out);
     }
 
@@ -241,12 +416,17 @@ public final class RayaBuild {
         return Math.max(min, Math.min(max, v));
     }
 
-    /** Сколько блоков каждого типа нужно (для отчёта игроку). */
+    private static String firstAlt(String chain) {
+        String c = chain.contains("|") ? chain.substring(0, chain.indexOf('|')) : chain;
+        return c.startsWith("~") ? c.substring(1) : c;
+    }
+
+    /** Сколько блоков каждого типа нужно (для отчёта игроку). Необязательные украшения не считаются. */
     public static String needs(Plan p) {
         Map<String, Integer> counts = new LinkedHashMap<>();
         for (Step s : p.steps) {
-            String key = s.block().isBlank() ? "любой блок" : s.block();
-            counts.merge(key, 1, Integer::sum);
+            if (s.optional()) continue;
+            counts.merge(lastAlt(s.chain()), 1, Integer::sum);
         }
         StringBuilder sb = new StringBuilder();
         for (Map.Entry<String, Integer> e : counts.entrySet()) {
@@ -256,14 +436,15 @@ public final class RayaBuild {
         return sb.toString();
     }
 
+    /** Последний (основной) вариант цепочки — то, что обязательно нужно, если остальные недоступны. */
+    private static String lastAlt(String chain) {
+        String c = chain.contains("|") ? chain.substring(chain.lastIndexOf('|') + 1) : chain;
+        return c.startsWith("~") ? c.substring(1) : c;
+    }
+
     // ------------------------------------------------------------------ материалы
 
     private record Material(@Nullable ItemStack source, BlockItem item, boolean free) {}
-
-    private static int score(ItemStack s, String filter) {
-        if (s.isEmpty() || !(s.getItem() instanceof BlockItem)) return 0;
-        return scoreItem(s.getItem(), s.getHoverName().getString(), filter);
-    }
 
     private static int scoreItem(Item item, String displayName, String filterRaw) {
         if (!(item instanceof BlockItem)) return 0;
@@ -284,28 +465,42 @@ public final class RayaBuild {
         return list;
     }
 
+    /** Лучший подходящий стек: сначала точность совпадения, потом тот вид блоков, которого больше всего (единый стиль). */
     @Nullable
     private static Material findIn(List<ItemStack> stacks, String filter) {
-        int bestScore = 0, bestLen = Integer.MAX_VALUE;
+        int bestScore = 0;
+        for (ItemStack s : stacks) {
+            if (s.isEmpty() || !(s.getItem() instanceof BlockItem)) continue;
+            bestScore = Math.max(bestScore, scoreItem(s.getItem(), s.getHoverName().getString(), filter));
+        }
+        if (bestScore == 0) return null;
+        Map<Item, Integer> totals = new HashMap<>();
+        for (ItemStack s : stacks) {
+            if (s.isEmpty() || !(s.getItem() instanceof BlockItem)) continue;
+            if (scoreItem(s.getItem(), s.getHoverName().getString(), filter) == bestScore) {
+                totals.merge(s.getItem(), s.getCount(), Integer::sum);
+            }
+        }
+        Item bestItem = null;
+        int bestTotal = -1;
+        for (Map.Entry<Item, Integer> e : totals.entrySet()) {
+            if (e.getValue() > bestTotal) {
+                bestTotal = e.getValue();
+                bestItem = e.getKey();
+            }
+        }
         ItemStack best = null;
         for (ItemStack s : stacks) {
-            int sc = score(s, filter);
-            if (sc == 0) continue;
-            int len = BuiltInRegistries.ITEM.getKey(s.getItem()).getPath().length();
-            if (sc > bestScore || (sc == bestScore && len < bestLen)) {
-                bestScore = sc;
-                bestLen = len;
-                best = s;
-            }
+            if (!s.isEmpty() && s.getItem() == bestItem && (best == null || s.getCount() > best.getCount())) best = s;
         }
         return best == null ? null : new Material(best, (BlockItem) best.getItem(), false);
     }
 
     @Nullable
-    private static Material findMaterial(RayaPrimeEntity raya, @Nullable Player owner, String filter) {
+    private static Material findOne(RayaPrimeEntity raya, @Nullable Player owner, String filter, boolean ownOnly) {
         Material m = findIn(contents(raya.getRayaInventory()), filter);
         if (m != null) return m;
-        if (owner != null && RayaConfig.BUILD_FROM_OWNER_INVENTORY.get()) {
+        if (!ownOnly && owner != null && RayaConfig.BUILD_FROM_OWNER_INVENTORY.get()) {
             m = findIn(owner.getInventory().items, filter);
             if (m != null) return m;
         }
@@ -323,6 +518,27 @@ public final class RayaBuild {
                 }
             }
             if (best != null) return new Material(null, best, true);
+        }
+        return null;
+    }
+
+    /** Подбирает материал по цепочке вариантов; запоминает выбранный конкретный блок для единообразия. */
+    @Nullable
+    private static Material findMaterial(RayaPrimeEntity raya, @Nullable Player owner, Plan plan, String chain) {
+        for (String altRaw : chain.split("\\|")) {
+            boolean ownOnly = altRaw.startsWith("~");
+            String alt = ownOnly ? altRaw.substring(1) : altRaw;
+            String concrete = plan.resolved.get(alt);
+            if (concrete != null) {
+                Material m = findOne(raya, owner, concrete, ownOnly);
+                if (m != null) return m;
+                plan.resolved.remove(alt); // закончился — выберем другой вид
+            }
+            Material m = findOne(raya, owner, alt, ownOnly);
+            if (m != null) {
+                plan.resolved.put(alt, BuiltInRegistries.ITEM.getKey(m.item()).toString());
+                return m;
+            }
         }
         return null;
     }
@@ -380,23 +596,28 @@ public final class RayaBuild {
         raya.getLookControl().setLookAt(center.x, center.y, center.z);
         if (raya.tickCount % 3 != 0) return;
 
-        Material m = findMaterial(raya, owner, step.block());
-        if (m == null && step.fallback() != null) m = findMaterial(raya, owner, step.fallback());
+        Material m = findMaterial(raya, owner, plan, step.chain());
         if (m == null) {
-            plan.missing = step.block().isBlank() ? "любые блоки" : step.block();
+            if (step.optional()) { // украшение без материала — просто пропускаем
+                plan.steps.poll();
+                return;
+            }
+            plan.missing = lastAlt(step.chain());
             long now = level.getGameTime();
             if (now - plan.lastNoMaterialMsg > 600) {
                 plan.lastNoMaterialMsg = now;
                 int left = 0;
-                for (Step s : plan.steps) if (s.block().equals(step.block())) left++;
+                for (Step s : plan.steps) if (!s.optional() && lastAlt(s.chain()).equals(plan.missing)) left++;
                 raya.tell("Мне не хватает блоков «" + plan.missing + "» (нужно ещё около " + left
                         + "). Положи их мне в инвентарь (ПКМ по мне) или к себе — и я продолжу. Отменить стройку: «Рая, отмена».");
             }
             return;
         }
+        plan.missing = "";
 
         ItemStack single = new ItemStack(m.item());
-        DirectionalPlaceContext ctx = new DirectionalPlaceContext(level, pos, Direction.DOWN, single, Direction.UP);
+        Direction dir = step.facing() != null ? step.facing() : Direction.DOWN;
+        DirectionalPlaceContext ctx = new DirectionalPlaceContext(level, pos, dir, single, Direction.UP);
         InteractionResult result = m.item().place(ctx);
         if (result.consumesAction()) {
             if (!m.free() && m.source() != null) {
@@ -405,6 +626,7 @@ public final class RayaBuild {
             }
             plan.steps.poll();
             plan.fails = 0;
+            raya.playBuildSwing();
         } else if (++plan.fails >= 4) { // что-то мешает (сущность, неподходящее место) — пропускаем блок
             plan.steps.poll();
             plan.skipped++;
@@ -418,6 +640,7 @@ public final class RayaBuild {
     private static void finishPlan(RayaPrimeEntity raya, Plan plan) {
         raya.setBuildPlan(null);
         int done = plan.total - plan.skipped;
+        raya.playAnimation(RayaPrimeEntity.ANIM_DANCE, 60);
         raya.say("Готово! Стройка «" + plan.name + "» завершена: поставлено около " + done + " блоков"
                 + (plan.skipped > 0 ? " (" + plan.skipped + " пропустила — место было занято или недоступно)." : "."),
                 RayaVoice.Mood.HAPPY);
