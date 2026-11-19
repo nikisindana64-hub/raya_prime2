@@ -1,0 +1,10 @@
+{
+  "entity.rayaprime.raya_prime": "Raya-Prime [P.E.A.C.H.]",
+  "item.rayaprime.raya_core_spawner": "P.E.A.C.H. Module 'Raya-Prime'",
+  "container.rayaprime.inventory": "Raya PM-Fabricator Storage",
+  "rayaprime.msg.summoned": "§b[Raya-Prime]§r P.E.A.C.H. systems initialized. Hello! I am online.",
+  "rayaprime.msg.no_api_key": "§c[Raya-Prime]§r Gemini API key is missing! Set it via /raya apikey <key> or in config/rayaprime-common.toml",
+  "item.rayaprime.raya_core": "Raya Core",
+  "item.rayaprime.raya_core.tooltip1": "Raya-Prime folded into your inventory.",
+  "item.rayaprime.raya_core.tooltip2": "Right-click to release her (she can hear you while inside)."
+}

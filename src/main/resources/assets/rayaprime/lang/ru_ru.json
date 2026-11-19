@@ -1,0 +1,10 @@
+{
+  "entity.rayaprime.raya_prime": "Райя-Прайм [П.Е.Р.С.И.К.]",
+  "item.rayaprime.raya_core_spawner": "Модуль П.Е.Р.С.И.К. «Райя-Прайм»",
+  "container.rayaprime.inventory": "Хранилище ПМ-Фабрикатора Раи",
+  "rayaprime.msg.summoned": "§b[Райя-Прайм]§r Системы П.Е.Р.С.И.К. инициализированы. Привет! Я на связи.",
+  "rayaprime.msg.no_api_key": "§c[Райя-Прайм]§r Не задан ключ Gemini API! Укажите его командой /raya apikey <ключ> или в config/rayaprime-common.toml",
+  "item.rayaprime.raya_core": "Ядро Раи",
+  "item.rayaprime.raya_core.tooltip1": "Райя-Прайм, свёрнутая в инвентарь.",
+  "item.rayaprime.raya_core.tooltip2": "ПКМ — выпустить её (внутри она тебя слышит)."
+}
