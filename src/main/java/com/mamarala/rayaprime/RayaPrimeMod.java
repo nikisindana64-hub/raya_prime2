@@ -10,6 +10,7 @@ import com.mamarala.rayaprime.entity.RayaPrimeEntity;
 import com.mamarala.rayaprime.item.RayaCoreItem;
 import com.mamarala.rayaprime.item.RayaStorage;
 import com.mamarala.rayaprime.network.RayaSpeechClient;
+import com.mamarala.rayaprime.network.RayaOpenSettingsPayload;
 import com.mamarala.rayaprime.network.RayaPatPayload;
 import com.mamarala.rayaprime.network.RayaSpeechPayload;
 import com.mamarala.rayaprime.scanner.ModKnowledgeScanner;
@@ -44,6 +45,7 @@ import net.neoforged.neoforge.event.entity.EntityAttributeCreationEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppedEvent;
 import net.neoforged.neoforge.event.tick.PlayerTickEvent;
+import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 import net.neoforged.neoforge.registries.DeferredHolder;
@@ -87,6 +89,9 @@ public class RayaPrimeMod {
 
     public RayaPrimeMod(IEventBus modEventBus, ModContainer modContainer) {
         modContainer.registerConfig(ModConfig.Type.COMMON, RayaConfig.SPEC);
+        if (net.neoforged.fml.loading.FMLEnvironment.dist == net.neoforged.api.distmarker.Dist.CLIENT) {
+            com.mamarala.rayaprime.client.RayaSettingsClient.register(modContainer); // меню «Настройки» в списке модов
+        }
 
         ENTITIES.register(modEventBus);
         ITEMS.register(modEventBus);
@@ -105,6 +110,8 @@ public class RayaPrimeMod {
     private void registerPayloads(RegisterPayloadHandlersEvent event) {
         PayloadRegistrar registrar = event.registrar("1");
         registrar.playToClient(RayaSpeechPayload.TYPE, RayaSpeechPayload.STREAM_CODEC, RayaSpeechClient::handle);
+        registrar.playToClient(RayaOpenSettingsPayload.TYPE, RayaOpenSettingsPayload.STREAM_CODEC,
+                com.mamarala.rayaprime.client.RayaSettingsClient::handleOpen);
         registrar.playToServer(RayaPatPayload.TYPE, RayaPatPayload.STREAM_CODEC, RayaPatPayload::handle);
     }
 
@@ -151,6 +158,11 @@ public class RayaPrimeMod {
     @SubscribeEvent
     public void onRegisterCommands(RegisterCommandsEvent event) {
         event.getDispatcher().register(Commands.literal("raya")
+                .then(Commands.literal("settings").executes(ctx -> {
+                    ServerPlayer player = ctx.getSource().getPlayerOrException();
+                    PacketDistributor.sendToPlayer(player, new RayaOpenSettingsPayload());
+                    return 1;
+                }))
                 .then(Commands.literal("summon").executes(ctx -> {
                     ServerPlayer player = ctx.getSource().getPlayerOrException();
                     ServerLevel level = player.serverLevel();
@@ -266,6 +278,7 @@ public class RayaPrimeMod {
                             + "/raya summon — позвать; /raya store — свернуться в Ядро; /raya release — выпустить\n"
                             + "/raya build <house|tower|wall|fence|platform|box|pillar|stairs> [блок] — построить; /raya cancel — отмена\n"
                             + "/raya say <текст> — проверка голоса Gemini; /raya voicetest — проверка звука на ПК\n"
+                            + "/raya settings (или клавиша O) — меню настроек\n"
                             + "/raya guard — вкл/выкл охрану; /raya scan — что вокруг; /raya status; /raya mods\n"
                             + "/raya ask <текст> или в чате «Рая, ...» — поговорить (строить, ломать, команды, сюжет)"), false);
                     return 1;

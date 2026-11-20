@@ -110,7 +110,7 @@ public class RayaVoiceChatPlugin implements VoicechatPlugin {
         long now = System.currentTimeMillis();
         long threshold = RayaConfig.SILENCE_THRESHOLD_MS.get();
         for (Map.Entry<UUID, PlayerVoiceBuffer> entry : buffers.entrySet()) {
-            byte[] wav = entry.getValue().flushIfSilent(now, threshold, MIN_PHRASE_BYTES);
+            byte[] wav = entry.getValue().flushIfSilent(now, threshold, RayaConfig.VOICE_MIN_MS.get(), RayaConfig.VOICE_TRIGGER_RMS.get());
             if (wav == null) continue;
             UUID uuid = entry.getKey();
             MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
@@ -161,37 +161,73 @@ public class RayaVoiceChatPlugin implements VoicechatPlugin {
     private static class PlayerVoiceBuffer {
         private final OpusDecoder decoder;
         private final ByteArrayOutputStream pcm16k = new ByteArrayOutputStream();
-        private long lastPacketMs = 0L;
+        private final java.util.ArrayDeque<byte[]> preroll = new java.util.ArrayDeque<>();
+        private long lastVoiceMs = 0L;
         private boolean speaking = false;
+        private long voicedSamples = 0L;
+        private double peakRms = 0.0;
+        private int voicedBytePos = 0;
 
         PlayerVoiceBuffer(OpusDecoder decoder) {
             this.decoder = decoder;
         }
 
-        synchronized void onPacket(byte[] opus, double rmsThreshold, int maxBytes) {
-            short[] pcm = decoder.decode(opus);
-            if (pcm == null || pcm.length == 0) return;
-            if (!speaking && rms(pcm) < rmsThreshold) return; // ждём начала речи
-            speaking = true;
-            lastPacketMs = System.currentTimeMillis();
-            if (pcm16k.size() >= maxBytes) return;
-            // 48 кГц → 16 кГц усреднением троек (в 3 раза меньше трафика к Gemini)
+        /** 48 кГц → 16 кГц усреднением троек (в 3 раза меньше трафика к Gemini). */
+        private static byte[] downsample(short[] pcm) {
             ByteBuffer bb = ByteBuffer.allocate((pcm.length / 3) * 2).order(ByteOrder.LITTLE_ENDIAN);
             for (int i = 0; i + 2 < pcm.length; i += 3) {
                 bb.putShort((short) ((pcm[i] + pcm[i + 1] + pcm[i + 2]) / 3));
             }
-            pcm16k.writeBytes(bb.array());
+            return bb.array();
         }
 
-        /** @return WAV-байты, если фраза закончилась (пауза ≥ threshold), иначе null */
-        synchronized byte[] flushIfSilent(long now, long thresholdMs, int minBytes) {
-            if (!speaking || now - lastPacketMs < thresholdMs) return null;
+        synchronized void onPacket(byte[] opus, double rmsThreshold, int maxBytes) {
+            short[] pcm = decoder.decode(opus);
+            if (pcm == null || pcm.length == 0) return;
+            double r = rms(pcm);
+            byte[] down = downsample(pcm);
+            // начало речи — по полному порогу, продолжение — по сниженному (гистерезис)
+            boolean voiced = r >= (speaking ? rmsThreshold * 0.55 : rmsThreshold);
+            if (!speaking) {
+                if (!voiced) {
+                    preroll.addLast(down); // небольшой запас перед началом, чтобы не терять первый слог
+                    while (preroll.size() > 8) preroll.removeFirst();
+                    return;
+                }
+                speaking = true;
+                voicedSamples = 0L;
+                peakRms = 0.0;
+                for (byte[] b : preroll) pcm16k.writeBytes(b);
+                preroll.clear();
+            }
+            if (pcm16k.size() < maxBytes) pcm16k.writeBytes(down);
+            if (voiced) {
+                lastVoiceMs = System.currentTimeMillis();
+                voicedSamples += pcm.length;
+                peakRms = Math.max(peakRms, r);
+                voicedBytePos = pcm16k.size();
+            }
+        }
+
+        /**
+         * @return WAV-байты, если фраза закончилась (пауза ≥ threshold после ПОСЛЕДНЕГО громкого кадра), иначе null.
+         * Шум, щелчки и слишком короткие/тихие фразы отбрасываются, хвост тишины обрезается.
+         */
+        synchronized byte[] flushIfSilent(long now, long thresholdMs, int minVoiceMs, double trigger) {
+            if (!speaking || now - lastVoiceMs < thresholdMs) return null;
             speaking = false;
             byte[] raw = pcm16k.toByteArray();
+            int endPos = Math.min(raw.length, voicedBytePos + 16000 * 2 * 3 / 10); // последний громкий кадр + 0,3 с
+            long voicedMs = voicedSamples / 48L;
+            double peak = peakRms;
             pcm16k.reset();
             decoder.resetState();
-            if (raw.length < minBytes) return null;
-            return wav(raw, 16000);
+            voicedBytePos = 0;
+            if (voicedMs < minVoiceMs || peak < trigger * 1.5 || endPos < 16000 * 2 * 3 / 10) {
+                RayaPrimeMod.LOGGER.debug("[RayaPrime] Шум отброшен: речи {} мс, пик {}", voicedMs, (int) peak);
+                return null;
+            }
+            return wav(java.util.Arrays.copyOf(raw, endPos), 16000);
         }
 
         synchronized void close() {

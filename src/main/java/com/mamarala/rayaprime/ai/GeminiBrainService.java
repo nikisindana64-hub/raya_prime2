@@ -109,6 +109,7 @@ public class GeminiBrainService {
 
     private static final String VOICE_NOTE = """
             Это ГОЛОСОВОЕ сообщение игрока (аудио приложено). Распознай речь и заполни поле "heard".
+            ВАЖНО: записывай в "heard" ТОЛЬКО слова, которые ты реально и отчётливо слышишь. Если в аудио тишина, шум, дыхание, щелчки, музыка, чужие звуки или неразборчивое бормотание — "heard": "", "reply": "", "actions": []. НИКОГДА не додумывай и не выдумывай фразы, не подставляй типичные «субтитры» и вежливые фразы.
             Отвечай и действуй, ТОЛЬКО если игрок обращается к тебе (Рая, Райя, Прайм, Персик) или это явная команда тебе по контексту.
             Если речь не к тебе (болтает с друзьями, сам с собой, шум) — верни "reply": "" и "actions": [].
             """;
@@ -325,6 +326,14 @@ public class GeminiBrainService {
             int animId = RayaPrimeEntity.animIdByName(str(decision, "anim"));
             if (animId == RayaPrimeEntity.ANIM_NONE) animId = RayaPrimeEntity.animForText(reply);
 
+            if (voice && !acceptVoice(player, heard)) {
+                RayaPrimeMod.LOGGER.info("[RayaPrime] Голосовая фраза отброшена (ложное срабатывание или не к ней): «{}»", heard);
+                if (body != null) {
+                    body.restoreBaseEmotion();
+                    if (body.getAnimId() == RayaPrimeEntity.ANIM_THINK) body.stopAnimation();
+                }
+                return;
+            }
             if (quietOk && reply.isEmpty() && !hasActions(decision)) {
                 if (body != null) body.restoreBaseEmotion(); // речь была не к Рае
                 return;
@@ -368,6 +377,7 @@ public class GeminiBrainService {
                 if (!sync) player.sendSystemMessage(Component.literal(line));
                 RayaVoice.speak(player.getServer(), body, player, reply, apiKey, RayaVoice.moodOf(emotion),
                         sync ? () -> player.sendSystemMessage(Component.literal(line)) : null);
+                LAST_REPLY_MS.put(player.getUUID(), System.currentTimeMillis());
                 remember(player.getUUID(), voice ? (heard.isEmpty() ? "(голосовое сообщение)" : heard) : userText, reply);
             }
         } catch (Exception e) {
@@ -377,6 +387,26 @@ public class GeminiBrainService {
             if (shown.length() > 300) shown = shown.substring(0, 300) + "…";
             player.sendSystemMessage(Component.literal("§b[Райя-Прайм]§f " + shown));
         }
+    }
+
+    private static final java.util.regex.Pattern NAME_IN_SPEECH = java.util.regex.Pattern.compile(
+            "(?<![\\p{L}])(?:рай[яаюеи]|райя|райю|райе|раей|рай|прайм\\p{L}*|персик\\p{L}*|raya|prime)(?![\\p{L}])",
+            java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE);
+    private static final String[] HALLUCINATIONS = {"субтитр", "продолжение следует", "спасибо за просмотр", "подписывайтесь",
+            "amara.org", "thanks for watching", "редактор", "корректор", "dimatorzok", "до новых встреч", "всем пока"};
+    /** Когда Райя последний раз отвечала игроку — для диалога без повторного обращения по имени. */
+    private static final Map<UUID, Long> LAST_REPLY_MS = new ConcurrentHashMap<>();
+
+    /** Фильтр голоса: пустая/выдуманная фраза или без обращения вне диалога — игнорируем. */
+    private static boolean acceptVoice(ServerPlayer player, String heard) {
+        String h = heard == null ? "" : heard.trim();
+        if (h.length() < 2) return false;
+        String low = h.toLowerCase(Locale.ROOT);
+        for (String bad : HALLUCINATIONS) if (low.contains(bad)) return false;
+        if (!RayaConfig.VOICE_REQUIRE_WAKE_WORD.get()) return true;
+        if (NAME_IN_SPEECH.matcher(h).find()) return true;
+        Long last = LAST_REPLY_MS.get(player.getUUID());
+        return last != null && System.currentTimeMillis() - last < RayaConfig.VOICE_FOLLOWUP_SECONDS.get() * 1000L;
     }
 
     private static boolean hasActions(JsonObject d) {

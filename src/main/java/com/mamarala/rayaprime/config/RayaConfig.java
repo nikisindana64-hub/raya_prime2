@@ -14,6 +14,9 @@ public class RayaConfig {
     public static final ModConfigSpec.BooleanValue VOICE_ACTIVATION_ENABLED;
     public static final ModConfigSpec.IntValue SILENCE_THRESHOLD_MS;
     public static final ModConfigSpec.DoubleValue VOICE_TRIGGER_RMS;
+    public static final ModConfigSpec.IntValue VOICE_MIN_MS;
+    public static final ModConfigSpec.BooleanValue VOICE_REQUIRE_WAKE_WORD;
+    public static final ModConfigSpec.IntValue VOICE_FOLLOWUP_SECONDS;
     public static final ModConfigSpec.BooleanValue SPEECH_ENABLED;
     public static final ModConfigSpec.DoubleValue SPEECH_VOLUME;
     public static final ModConfigSpec.BooleanValue USE_GEMINI_TTS;
@@ -90,6 +93,16 @@ public class RayaConfig {
         VOICE_TRIGGER_RMS = BUILDER
                 .comment("Порог громкости (RMS), с которого начинается запись фразы.")
                 .defineInRange("voiceTriggerRms", 220.0, 20.0, 5000.0);
+        VOICE_MIN_MS = BUILDER
+                .comment("Минимальная длительность именно ГРОМКОЙ речи (мс), чтобы фраза ушла в Gemini. Щелчки и шум короче отбрасываются.")
+                .defineInRange("voiceMinMs", 450, 150, 3000);
+        VOICE_REQUIRE_WAKE_WORD = BUILDER
+                .comment("Реагировать на голос, только если в фразе есть её имя (Рая, Райя, Прайм, Персик) или идёт диалог (после её реплики).",
+                        "Защита от ложных срабатываний и от того, что она отвечает на разговоры с друзьями и на шум.")
+                .define("voiceRequireWakeWord", true);
+        VOICE_FOLLOWUP_SECONDS = BUILDER
+                .comment("Сколько секунд после её реплики можно продолжать диалог голосом без обращения по имени.")
+                .defineInRange("voiceFollowUpSeconds", 25, 0, 300);
         SPEECH_ENABLED = BUILDER
                 .comment("Озвучивать ответы Раи. Если Simple Voice Chat работает — звук идёт от тела Раи в 3D,",
                         "иначе — напрямую в игру владельцу (работает и в одиночной игре без voicechat).")
