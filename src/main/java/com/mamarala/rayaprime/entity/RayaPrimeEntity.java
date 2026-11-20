@@ -83,6 +83,13 @@ public class RayaPrimeEntity extends PathfinderMob {
     public static final int ANIM_WAVE = 5;
     public static final int ANIM_WORK = 6;
     public static final int ANIM_TREMBLE = 7;
+    public static final int ANIM_FLIP = 8;
+    public static final int ANIM_LAUGH = 9;
+    public static final int ANIM_SHRUG = 10;
+    public static final int ANIM_THINK = 11;
+    public static final int ANIM_BOW = 12;
+    public static final int ANIM_SALUTE = 13;
+    public static final int ANIM_LOVE = 14;
 
     private static final int MAX_QUEUED_TASKS = 48;
     private static final int TASK_TIMEOUT_TICKS = 20 * 45;
@@ -127,6 +134,7 @@ public class RayaPrimeEntity extends PathfinderMob {
     private int idleChatCooldown = 20 * 90;
     private RayaBuild.Plan buildPlan = null;
     private boolean guardMode = false;
+    private int petCooldown = 0;
     private final Map<String, BlockPos> waypoints = new LinkedHashMap<>();
     private int healCooldownTicks = 0;
     private int warnCooldownTicks = 0;
@@ -175,6 +183,7 @@ public class RayaPrimeEntity extends PathfinderMob {
         this.goalSelector.addGoal(1, new RayaGoals.RayaHideGoal(this));
         this.goalSelector.addGoal(2, new RayaGoals.RayaCombatGoal(this));
         this.goalSelector.addGoal(3, new RayaGoals.RayaBuildGoal(this));
+        this.goalSelector.addGoal(3, new RayaGoals.RayaGuideGoal(this));
         this.goalSelector.addGoal(3, new RayaGoals.RayaExecuteTaskGoal(this));
         this.goalSelector.addGoal(4, new RayaGoals.RayaFollowOwnerGoal(this));
     }
@@ -210,6 +219,8 @@ public class RayaPrimeEntity extends PathfinderMob {
                 tickReturn();
                 tickIdleChatter();
                 tickCare();
+                tickReminders();
+                if (this.petCooldown > 0) this.petCooldown -= 20;
             }
             if (this.tickCount % 10 == 0) {
                 tickFear();
@@ -264,6 +275,18 @@ public class RayaPrimeEntity extends PathfinderMob {
             }
             if (!isOwnedBy(serverPlayer) && !serverPlayer.hasPermissions(2)) {
                 serverPlayer.sendSystemMessage(Component.literal("§b[Райя-Прайм]§r Мой инвентарь доступен только моему носителю."));
+                return InteractionResult.CONSUME;
+            }
+            if (serverPlayer.isShiftKeyDown() && serverPlayer.getItemInHand(hand).isEmpty()) {
+                // Shift + ПКМ пустой рукой — погладить
+                if (this.petCooldown <= 0) {
+                    this.petCooldown = 100;
+                    String[] lines = {"Ой, приятно! Мои ушки это любят.", "Хи-хи, носитель, ты ласковый сегодня.",
+                            "Систему охлаждения заклинило от счастья!", "Ещё! Шучу. Но ещё немножко можно.",
+                            "Фиксирую рост настроения: плюс 87 процентов."};
+                    playAnimation(ANIM_LOVE, animDuration(ANIM_LOVE));
+                    say(lines[this.random.nextInt(lines.length)], RayaVoice.Mood.HAPPY);
+                }
                 return InteractionResult.CONSUME;
             }
             serverPlayer.openMenu(new SimpleMenuProvider(
@@ -344,13 +367,17 @@ public class RayaPrimeEntity extends PathfinderMob {
 
     /** Сказать в чат И голосом. */
     public void say(String text, RayaVoice.Mood mood) {
-        tell(text);
         if (mood == RayaVoice.Mood.HAPPY && !isAnimActive() && this.random.nextInt(3) == 0) {
             playAnimation(ANIM_WAVE, animDuration(ANIM_WAVE));
         }
         Player owner = getOwnerPlayer();
         if (owner instanceof ServerPlayer sp && this.level() instanceof ServerLevel sl) {
-            RayaVoice.speak(sl.getServer(), this, sp, text, RayaConfig.getEffectiveApiKey(), mood);
+            // текст в чате появляется одновременно с началом голоса
+            RayaVoice.speak(sl.getServer(), this, sp, text, RayaConfig.getEffectiveApiKey(), mood,
+                    RayaConfig.SYNC_CHAT_WITH_VOICE.get() ? () -> tell(text) : null);
+            if (!RayaConfig.SYNC_CHAT_WITH_VOICE.get()) tell(text);
+        } else {
+            tell(text);
         }
     }
 
@@ -390,7 +417,7 @@ public class RayaPrimeEntity extends PathfinderMob {
         }
         double distSq = this.distanceToSqr(Vec3.atCenterOf(targetPos));
         if (distSq > 9.0D) {
-            this.getMoveControl().setWantedPosition(
+            this.flyTo(
                     targetPos.getX() + 0.5, targetPos.getY() + 1.0, targetPos.getZ() + 0.5, 1.35D);
             return false;
         }
@@ -421,7 +448,7 @@ public class RayaPrimeEntity extends PathfinderMob {
         }
         double distSq = this.distanceToSqr(Vec3.atCenterOf(targetPos));
         if (distSq > 16.0D) {
-            this.getMoveControl().setWantedPosition(
+            this.flyTo(
                     targetPos.getX() + 0.5, targetPos.getY() + 1.5, targetPos.getZ() + 0.5, 1.35D);
             return false;
         }
@@ -477,7 +504,7 @@ public class RayaPrimeEntity extends PathfinderMob {
             return true;
         }
         if (this.inventory.canAddItem(nearest.getItem())) {
-            this.getMoveControl().setWantedPosition(nearest.getX(), nearest.getY() + 0.3, nearest.getZ(), 1.4D);
+            this.flyTo(nearest.getX(), nearest.getY() + 0.3, nearest.getZ(), 1.4D);
             return false;
         }
         tell("Мой инвентарь полон.");
@@ -887,6 +914,24 @@ public class RayaPrimeEntity extends PathfinderMob {
         this.entityData.set(DATA_ANIM_LEN, Math.max(4, ticks));
     }
 
+    /** Прервать текущую анимацию. */
+    public void stopAnimation() {
+        this.entityData.set(DATA_ANIM, ANIM_NONE);
+    }
+
+    /** Подобрать анимацию по тексту реплики, если Gemini её не указал. */
+    public static int animForText(String reply) {
+        if (reply == null) return ANIM_NONE;
+        String t = reply.toLowerCase(Locale.ROOT);
+        if (t.contains("хаха") || t.contains("ха-ха") || t.contains("хихи") || t.contains("смешн")) return ANIM_LAUGH;
+        if (t.contains("не знаю") || t.contains("без понятия") || t.contains("затрудняюсь")) return ANIM_SHRUG;
+        if (t.contains("извин") || t.contains("прости") || t.contains("виновата")) return ANIM_BOW;
+        if (t.contains("так точно") || t.contains("есть, капитан") || t.contains("слушаюсь")) return ANIM_SALUTE;
+        if (t.contains("люблю") || t.contains("обожаю") || t.contains("спасибо") || t.contains("мило")) return ANIM_LOVE;
+        if (t.contains("ура") || t.contains("получилось") || t.contains("победа")) return ANIM_FLIP;
+        return ANIM_NONE;
+    }
+
     /** Короткий взмах манипулятором при установке блока. */
     public void playBuildSwing() {
         if (!isAnimActive() || getAnimId() == ANIM_WORK) {
@@ -907,6 +952,13 @@ public class RayaPrimeEntity extends PathfinderMob {
             case "NOD", "YES" -> ANIM_NOD;
             case "NO", "SHAKE" -> ANIM_NO;
             case "WAVE" -> ANIM_WAVE;
+            case "FLIP", "BACKFLIP", "ROLL" -> ANIM_FLIP;
+            case "LAUGH", "LOL", "BOUNCE" -> ANIM_LAUGH;
+            case "SHRUG", "DONTKNOW" -> ANIM_SHRUG;
+            case "THINK", "PONDER" -> ANIM_THINK;
+            case "BOW", "SORRY" -> ANIM_BOW;
+            case "SALUTE" -> ANIM_SALUTE;
+            case "LOVE", "HEART" -> ANIM_LOVE;
             default -> ANIM_NONE;
         };
     }
@@ -918,6 +970,13 @@ public class RayaPrimeEntity extends PathfinderMob {
             case ANIM_NOD -> 24;
             case ANIM_NO -> 24;
             case ANIM_WAVE -> 40;
+            case ANIM_FLIP -> 28;
+            case ANIM_LAUGH -> 44;
+            case ANIM_SHRUG -> 36;
+            case ANIM_THINK -> 60;
+            case ANIM_BOW -> 36;
+            case ANIM_SALUTE -> 40;
+            case ANIM_LOVE -> 60;
             default -> 20;
         };
     }
@@ -931,7 +990,7 @@ public class RayaPrimeEntity extends PathfinderMob {
                 && (this.currentTask.type() == RayaTask.TaskType.MINE_BLOCK || this.currentTask.type() == RayaTask.TaskType.PLACE_BLOCK))) {
             if (!isAnimActive()) playAnimation(ANIM_WORK, 12);
         } else if (!isAnimActive() && this.random.nextInt(450) == 0 && "FOLLOW".equals(getActiveMode())) {
-            int[] pool = {ANIM_SPIN, ANIM_WAVE, ANIM_NOD};
+            int[] pool = {ANIM_SPIN, ANIM_WAVE, ANIM_NOD, ANIM_FLIP, ANIM_SHRUG, ANIM_THINK};
             int id = pool[this.random.nextInt(pool.length)];
             playAnimation(id, animDuration(id));
         }
@@ -947,6 +1006,18 @@ public class RayaPrimeEntity extends PathfinderMob {
             this.level().addParticle(ParticleTypes.HAPPY_VILLAGER,
                     this.getX() + (this.random.nextDouble() - 0.5D) * 0.8D, this.getY() + 0.7D,
                     this.getZ() + (this.random.nextDouble() - 0.5D) * 0.8D, 0.0D, 0.02D, 0.0D);
+        }
+        if ((anim == ANIM_LOVE || anim == ANIM_LAUGH) && this.tickCount % 5 == 0) {
+            this.level().addParticle(anim == ANIM_LOVE ? ParticleTypes.HEART : ParticleTypes.HAPPY_VILLAGER,
+                    this.getX() + (this.random.nextDouble() - 0.5D) * 0.7D, this.getY() + 0.9D,
+                    this.getZ() + (this.random.nextDouble() - 0.5D) * 0.7D, 0.0D, 0.03D, 0.0D);
+        }
+        if (anim == ANIM_THINK && this.tickCount % 10 == 0) {
+            this.level().addParticle(ParticleTypes.ENCHANT, this.getX(), this.getY() + 0.9D, this.getZ(),
+                    (this.random.nextDouble() - 0.5D) * 0.6D, 0.4D, (this.random.nextDouble() - 0.5D) * 0.6D);
+        }
+        if (anim == ANIM_FLIP && this.tickCount % 2 == 0) {
+            this.level().addParticle(ParticleTypes.END_ROD, this.getX(), this.getY() + 0.4D, this.getZ(), 0.0D, 0.0D, 0.0D);
         }
         if (anim == ANIM_WORK && this.tickCount % 2 == 0) {
             this.level().addParticle(ParticleTypes.ELECTRIC_SPARK,
@@ -1157,6 +1228,246 @@ public class RayaPrimeEntity extends PathfinderMob {
     protected void checkFallDamage(double y, boolean onGround, BlockState state, BlockPos pos) {
     }
 
+    // ---------- Проводник (GUIDE): ведёт игрока к точке ----------
+    @Nullable private BlockPos guideTarget = null;
+    private String guideName = "";
+    private int guideTicks = 0;
+    private int guideWaitTicks = 0;
+
+    public void startGuide(BlockPos target, String name) {
+        this.guideTarget = target.immutable();
+        this.guideName = name == null ? "" : name;
+        this.guideTicks = 0;
+        this.guideWaitTicks = 0;
+        setActiveMode("GUIDE");
+    }
+
+    @Nullable
+    public BlockPos getGuideTarget() {
+        return "GUIDE".equals(getActiveMode()) ? this.guideTarget : null;
+    }
+
+    public String getGuideName() {
+        return this.guideName;
+    }
+
+    /** Вызывается целью-проводником каждый тик; возвращает true, пока ведём. */
+    public boolean tickGuideStep(Player owner) {
+        BlockPos t = this.guideTarget;
+        if (t == null) return false;
+        this.guideTicks++;
+        if (this.guideTicks > 20 * 60 * 12) {
+            tell("Мы слишком долго идём, прекращаю вести.");
+            endGuide();
+            return false;
+        }
+        double tx = t.getX() + 0.5D, tz = t.getZ() + 0.5D;
+        double dx = tx - owner.getX(), dz = tz - owner.getZ();
+        double horizOwner = Math.sqrt(dx * dx + dz * dz);
+        if (horizOwner < 5.0D && Math.abs(t.getY() - owner.getY()) < 8.0D) {
+            say("Мы на месте" + (this.guideName.isEmpty() ? "!" : ": " + this.guideName + "!"), RayaVoice.Mood.HAPPY);
+            playAnimation(ANIM_DANCE, animDuration(ANIM_DANCE));
+            endGuide();
+            return false;
+        }
+        double ownerDist = this.distanceTo(owner);
+        this.getLookControl().setLookAt(owner, 25.0F, 25.0F);
+        if (ownerDist > 14.0D) {
+            // игрок отстал — ждём его (издалека возвращаемся к нему)
+            this.guideWaitTicks++;
+            if (ownerDist > 30.0D) {
+                this.flyTo(owner.getX(), owner.getY() + 1.8D, owner.getZ(), 1.3D);
+            }
+            if (this.guideWaitTicks % 400 == 200) {
+                say(this.random.nextBoolean() ? "Не отставай, я жду!" : "Эй, носитель, мы идём туда, а не обратно!", RayaVoice.Mood.NORMAL);
+            }
+            return true;
+        }
+        this.guideWaitTicks = 0;
+        double dxr = tx - this.getX(), dzr = tz - this.getZ();
+        double hr = Math.sqrt(dxr * dxr + dzr * dzr);
+        double step = Math.min(10.0D, Math.max(hr, 1.0D));
+        double px = this.getX() + dxr / Math.max(hr, 0.001D) * step;
+        double pz = this.getZ() + dzr / Math.max(hr, 0.001D) * step;
+        double py = this.getY() + Mth.clamp(t.getY() + 1.5D - this.getY(), -2.5D, 2.5D);
+        py = Math.max(py, owner.getY() + 0.8D);
+        this.flyTo(px, py, pz, 1.1D);
+        return true;
+    }
+
+    public void endGuide() {
+        this.guideTarget = null;
+        this.guideName = "";
+        if ("GUIDE".equals(getActiveMode())) setActiveMode("FOLLOW");
+    }
+
+    // ---------- Напоминания и заметки ----------
+    private final java.util.List<Object[]> reminders = new java.util.ArrayList<>(); // {Long dueGameTime, String text}
+    private final java.util.List<String> notes = new java.util.ArrayList<>();
+
+    public boolean addReminder(int seconds, String text) {
+        if (text == null || text.isBlank() || seconds <= 0 || this.reminders.size() >= 8) return false;
+        String t = text.trim();
+        if (t.length() > 160) t = t.substring(0, 160);
+        this.reminders.add(new Object[]{this.level().getGameTime() + seconds * 20L, t});
+        return true;
+    }
+
+    public boolean addNote(String text) {
+        if (text == null || text.isBlank()) return false;
+        String t = text.trim();
+        if (t.length() > 160) t = t.substring(0, 160);
+        for (String n : this.notes) if (n.equalsIgnoreCase(t)) return true;
+        if (this.notes.size() >= 30) this.notes.remove(0);
+        this.notes.add(t);
+        return true;
+    }
+
+    /** Забыть заметки, содержащие фрагмент; "all" или пусто — все. Возвращает, сколько забыла. */
+    public int forgetNotes(String fragment) {
+        String f = fragment == null ? "" : fragment.toLowerCase(Locale.ROOT).trim();
+        int before = this.notes.size();
+        if (f.isEmpty() || f.equals("all") || f.equals("все") || f.equals("всё")) {
+            this.notes.clear();
+        } else {
+            this.notes.removeIf(n -> n.toLowerCase(Locale.ROOT).contains(f));
+        }
+        return before - this.notes.size();
+    }
+
+    public String getNotesSummary() {
+        return String.join("; ", this.notes);
+    }
+
+    public String getRemindersSummary() {
+        if (this.reminders.isEmpty()) return "";
+        long now = this.level().getGameTime();
+        StringBuilder sb = new StringBuilder();
+        for (Object[] r : this.reminders) {
+            if (sb.length() > 0) sb.append("; ");
+            long left = Math.max(0L, ((Long) r[0] - now) / 20L);
+            sb.append('«').append((String) r[1]).append("» через ").append(left >= 90 ? (left / 60) + " мин" : left + " с");
+        }
+        return sb.toString();
+    }
+
+    private void tickReminders() {
+        if (this.reminders.isEmpty()) return;
+        long now = this.level().getGameTime();
+        for (java.util.Iterator<Object[]> it = this.reminders.iterator(); it.hasNext(); ) {
+            Object[] r = it.next();
+            if ((Long) r[0] <= now) {
+                it.remove();
+                say("Напоминаю: " + r[1], RayaVoice.Mood.NORMAL);
+                playAnimation(ANIM_WAVE, animDuration(ANIM_WAVE));
+            }
+        }
+    }
+
+    // ---------- Полёт с обходом препятствий ----------
+    private Vec3 flyGoal = null;
+    private int flyRepath = 0;
+    private boolean flyClear = true;
+    private int flyCheckTick = 0;
+    private Vec3 flyLastPos = Vec3.ZERO;
+    private int flyStuck = 0;
+    private int flyUnstick = 0;
+    private Vec3 flyUnstickDir = Vec3.ZERO;
+
+    /**
+     * Лететь к точке, обходя блоки. Если прямая свободна — летит напрямую; иначе строит путь через FlyingPathNavigation
+     * (для далёких целей — по промежуточным точкам); если застряла — поднимается вверх и огибает сбоку.
+     * Вызывать каждый тик, пока нужно двигаться.
+     */
+    public void flyTo(double x, double y, double z, double speed) {
+        Vec3 goal = new Vec3(x, y, z);
+        double dSq = this.position().distanceToSqr(goal);
+        if (dSq < 6.25D) {
+            this.getNavigation().stop();
+            this.flyGoal = null;
+            this.flyStuck = 0;
+            this.flyUnstick = 0;
+            this.getMoveControl().setWantedPosition(x, y, z, speed);
+            return;
+        }
+        boolean goalMoved = this.flyGoal == null || this.flyGoal.distanceToSqr(goal) > 9.0D;
+        this.flyGoal = goal;
+
+        // обнаружение застревания: раз в секунду смотрим, сдвинулась ли она
+        if (this.tickCount % 20 == 0) {
+            if (this.position().distanceToSqr(this.flyLastPos) < 0.36D) this.flyStuck++;
+            else this.flyStuck = 0;
+            this.flyLastPos = this.position();
+            if (this.flyStuck >= 2 && this.flyUnstick <= 0) {
+                // выбираем обход: вверх и вбок (направление случайно слева/справа от линии к цели)
+                Vec3 dir = goal.subtract(this.position());
+                Vec3 side = new Vec3(-dir.z, 0, dir.x);
+                if (side.lengthSqr() < 1.0E-4) side = new Vec3(1, 0, 0);
+                side = side.normalize().scale(this.random.nextBoolean() ? 3.0D : -3.0D);
+                this.flyUnstickDir = new Vec3(side.x, 3.5D, side.z);
+                this.flyUnstick = 25;
+                this.flyStuck = 0;
+                this.getNavigation().stop();
+            }
+        }
+        if (this.flyUnstick > 0) {
+            this.flyUnstick--;
+            Vec3 t = this.position().add(this.flyUnstickDir);
+            this.getMoveControl().setWantedPosition(t.x, t.y, t.z, speed);
+            return;
+        }
+
+        if (goalMoved || ++this.flyCheckTick >= 4) {
+            this.flyCheckTick = 0;
+            this.flyClear = isFlightLineClear(goal);
+        }
+        if (this.flyClear) {
+            this.getNavigation().stop();
+            this.getMoveControl().setWantedPosition(x, y, z, speed);
+            return;
+        }
+
+        // прямой путь перегорожен — идём по навигации
+        if (goalMoved || --this.flyRepath <= 0) {
+            this.flyRepath = 20;
+            double dist = Math.sqrt(dSq);
+            Vec3 t = goal;
+            if (dist > 28.0D) {
+                t = this.position().add(goal.subtract(this.position()).scale(24.0D / dist));
+            }
+            this.getNavigation().moveTo(t.x, t.y, t.z, speed);
+        }
+        if (this.getNavigation().isDone()) {
+            // пути нет (или он закончился у стены) — поднимаемся над препятствием и двигаемся в сторону цели
+            Vec3 dir = goal.subtract(this.position());
+            Vec3 h = new Vec3(dir.x, 0, dir.z);
+            h = h.lengthSqr() > 1.0E-4 ? h.normalize().scale(2.0D) : Vec3.ZERO;
+            this.getMoveControl().setWantedPosition(this.getX() + h.x, this.getY() + 2.5D, this.getZ() + h.z, speed);
+        }
+    }
+
+    /** Три луча (по центру и по бокам) без столкновений с блоками на пути к цели. */
+    private boolean isFlightLineClear(Vec3 goal) {
+        Vec3 from = this.position().add(0, this.getBbHeight() * 0.5D, 0);
+        Vec3 to = goal.add(0, this.getBbHeight() * 0.5D - 0.2D, 0);
+        Vec3 dir = to.subtract(from);
+        double len = dir.length();
+        if (len < 1.0E-3) return true;
+        double check = Math.min(len - 0.5D, 26.0D);
+        if (check <= 0.2D) return true;
+        Vec3 unit = dir.scale(1.0D / len);
+        Vec3 side = new Vec3(-unit.z, 0, unit.x);
+        side = side.lengthSqr() < 1.0E-4 ? new Vec3(0.35D, 0, 0) : side.normalize().scale(0.35D);
+        Vec3 end = from.add(unit.scale(check));
+        Vec3[] offs = {Vec3.ZERO, side, side.scale(-1.0D), new Vec3(0, 0.4D, 0), new Vec3(0, -0.4D, 0)};
+        for (Vec3 o : offs) {
+            BlockHitResult hit = this.level().clip(new ClipContext(from.add(o), end.add(o),
+                    ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, this));
+            if (hit.getType() != HitResult.Type.MISS) return false;
+        }
+        return true;
+    }
+
     @Override
     public void travel(Vec3 travelVector) {
         if (this.isEffectiveAi() || this.isControlledByLocalInstance()) {
@@ -1192,6 +1503,17 @@ public class RayaPrimeEntity extends PathfinderMob {
             wps.add(w);
         }
         tag.put("Waypoints", wps);
+        ListTag noteList = new ListTag();
+        for (String n : this.notes) noteList.add(net.minecraft.nbt.StringTag.valueOf(n));
+        tag.put("Notes", noteList);
+        ListTag remList = new ListTag();
+        for (Object[] r : this.reminders) {
+            CompoundTag c = new CompoundTag();
+            c.putLong("Due", (Long) r[0]);
+            c.putString("Text", (String) r[1]);
+            remList.add(c);
+        }
+        tag.put("Reminders", remList);
     }
 
     @Override
@@ -1214,6 +1536,16 @@ public class RayaPrimeEntity extends PathfinderMob {
             this.waypoints.put(w.getString("Name"), new BlockPos(w.getInt("X"), w.getInt("Y"), w.getInt("Z")));
         }
         this.guardMode = "GUARD".equals(tag.getString("ActiveMode"));
+        if ("GUIDE".equals(tag.getString("ActiveMode"))) this.entityData.set(DATA_ACTIVE_MODE, "FOLLOW");
+        this.notes.clear();
+        ListTag noteList = tag.getList("Notes", 8);
+        for (int i = 0; i < noteList.size(); i++) this.notes.add(noteList.getString(i));
+        this.reminders.clear();
+        ListTag remList = tag.getList("Reminders", 10);
+        for (int i = 0; i < remList.size(); i++) {
+            CompoundTag c = remList.getCompound(i);
+            this.reminders.add(new Object[]{c.getLong("Due"), c.getString("Text")});
+        }
         ListTag items = tag.getList("RayaInventory", 10);
         for (int i = 0; i < items.size(); i++) {
             CompoundTag slotTag = items.getCompound(i);

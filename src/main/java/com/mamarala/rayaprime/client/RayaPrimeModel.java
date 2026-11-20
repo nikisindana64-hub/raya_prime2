@@ -167,6 +167,58 @@ public class RayaPrimeModel extends EntityModel<RayaPrimeEntity> {
                     this.leftEar.zRot = 1.15F;
                     this.rightEar.zRot = -1.15F;
                 }
+                case RayaPrimeEntity.ANIM_FLIP -> {
+                    this.coreCube.xRot += p * ((float) Math.PI * 2.0F);
+                    this.root.y -= Mth.sin(p * (float) Math.PI) * 6.0F;
+                    this.leftEar.zRot = 0.9F;
+                    this.rightEar.zRot = -0.9F;
+                }
+                case RayaPrimeEntity.ANIM_LAUGH -> {
+                    this.root.y -= Math.abs(Mth.sin(t * 0.9F)) * 2.2F;
+                    this.coreCube.xRot += Mth.sin(t * 1.8F) * 0.12F;
+                    this.leftEar.zRot = 0.5F + Mth.sin(t * 1.5F) * 0.3F;
+                    this.rightEar.zRot = -0.5F - Mth.sin(t * 1.5F) * 0.3F;
+                    this.leftArm.xRot = -0.8F + Mth.sin(t * 1.8F) * 0.4F;
+                    this.rightArm.xRot = -0.8F - Mth.sin(t * 1.8F) * 0.4F;
+                }
+                case RayaPrimeEntity.ANIM_SHRUG -> {
+                    float k = Mth.sin(p * (float) Math.PI);
+                    this.leftArm.zRot = 1.1F * k;
+                    this.rightArm.zRot = -1.1F * k;
+                    this.leftEar.zRot = 0.9F * k + 0.25F * (1.0F - k);
+                    this.rightEar.zRot = -0.9F * k - 0.25F * (1.0F - k);
+                    this.coreCube.zRot = Mth.sin(t * 0.5F) * 0.15F * k;
+                    this.root.y -= 1.5F * k;
+                }
+                case RayaPrimeEntity.ANIM_THINK -> {
+                    this.coreCube.zRot = 0.22F;
+                    this.coreCube.xRot -= 0.12F;
+                    this.leftEar.zRot = 0.2F + Mth.sin(t * 0.3F) * 0.25F;
+                    this.rightEar.zRot = -0.7F;
+                    this.rightArm.xRot = -1.5F;
+                    this.rightArm.zRot = -0.5F;
+                }
+                case RayaPrimeEntity.ANIM_BOW -> {
+                    float k = Mth.sin(p * (float) Math.PI);
+                    this.coreCube.xRot += 0.95F * k;
+                    this.root.y += 2.0F * k;
+                    this.leftEar.zRot = 1.0F * k + 0.25F * (1.0F - k);
+                    this.rightEar.zRot = -1.0F * k - 0.25F * (1.0F - k);
+                }
+                case RayaPrimeEntity.ANIM_SALUTE -> {
+                    float k = Mth.clamp(Mth.sin(p * (float) Math.PI) * 2.5F, 0.0F, 1.0F);
+                    this.rightArm.zRot = -2.4F * k;
+                    this.rightArm.xRot = -0.3F * k;
+                    this.coreCube.xRot -= 0.1F * k;
+                }
+                case RayaPrimeEntity.ANIM_LOVE -> {
+                    this.coreCube.zRot = Mth.sin(t * 0.25F) * 0.18F;
+                    this.root.y -= 1.0F + Mth.sin(t * 0.5F) * 1.2F;
+                    this.leftEar.zRot = 0.8F + Mth.sin(t * 0.6F) * 0.25F;
+                    this.rightEar.zRot = -0.8F - Mth.sin(t * 0.6F) * 0.25F;
+                    this.leftArm.zRot = 0.5F;
+                    this.rightArm.zRot = -0.5F;
+                }
                 default -> { }
             }
         }

@@ -629,6 +629,15 @@ public class ModKnowledgeScanner {
             if (!bs.isEmpty()) ctx.append(bs).append('\n');
             String wps = raya.getWaypointSummary(player.blockPosition());
             if (!wps.isEmpty()) ctx.append("Запомненные места: ").append(wps).append('\n');
+            String notes = raya.getNotesSummary();
+            if (!notes.isEmpty()) ctx.append("Твои заметки (память о носителе): ").append(notes).append('\n');
+            String rems = raya.getRemindersSummary();
+            if (!rems.isEmpty()) ctx.append("Активные напоминания: ").append(rems).append('\n');
+            if (raya.getGuideTarget() != null) {
+                BlockPos g = raya.getGuideTarget();
+                ctx.append("Ты ведёшь игрока к ").append(raya.getGuideName()).append(" [").append(g.getX()).append(',')
+                        .append(g.getY()).append(',').append(g.getZ()).append("].\n");
+            }
             SimpleContainer inv = raya.getRayaInventory();
             List<String> invItems = new ArrayList<>();
             for (int i = 0; i < inv.getContainerSize(); i++) {

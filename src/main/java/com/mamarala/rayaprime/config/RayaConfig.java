@@ -23,6 +23,9 @@ public class RayaConfig {
     public static final ModConfigSpec.ConfigValue<String> TTS_VOICE_CRIMSON;
     public static final ModConfigSpec.BooleanValue MOOD_VOICE_EFFECTS;
     public static final ModConfigSpec.BooleanValue TTS_STYLE;
+    public static final ModConfigSpec.BooleanValue TTS_CHUNKING;
+    public static final ModConfigSpec.IntValue CHAT_MAX_WAIT_SECONDS;
+    public static final ModConfigSpec.BooleanValue SYNC_CHAT_WITH_VOICE;
     public static final ModConfigSpec.BooleanValue VOICECHAT_3D_SPEECH;
 
     public static final ModConfigSpec.BooleanValue ALLOW_BLOCK_BREAKING;
@@ -108,6 +111,16 @@ public class RayaConfig {
                 .comment("Проигрывать голос Раи как 3D-звук через Simple Voice Chat (если он запущен и ты в нём).",
                         "По умолчанию выключено: голос идёт напрямую в игру и слышен всегда. Включай, если нужен звук именно от тела Раи в пространстве.")
                 .define("voiceChat3dSpeech", false);
+        TTS_CHUNKING = BUILDER
+                .comment("Длинные реплики озвучиваются двумя кусками: первое предложение звучит сразу, остальное готовится параллельно (меньше задержка).",
+                        "Если в чате часто пишет про лимит запросов (429) — выключи: каждый кусок это отдельный запрос к Gemini.")
+                .define("ttsChunking", true);
+        SYNC_CHAT_WITH_VOICE = BUILDER
+                .comment("Текст реплики появляется в чате в момент, когда начинает звучать голос (а не раньше).")
+                .define("syncChatWithVoice", true);
+        CHAT_MAX_WAIT_SECONDS = BUILDER
+                .comment("Сколько секунд максимум ждать голос, прежде чем показать текст в чате всё равно.")
+                .defineInRange("chatMaxWaitSeconds", 12, 2, 60);
         TTS_STYLE = BUILDER
                 .comment("Передавать TTS манеру речи по настроению (весело, холодно, испуганно) — поддерживают модели gemini-3.8-*-tts.")
                 .define("ttsStyle", true);

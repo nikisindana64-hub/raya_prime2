@@ -11,6 +11,8 @@ import net.neoforged.fml.ModList;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 import javax.annotation.Nullable;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
@@ -143,9 +145,35 @@ public final class RayaVoice {
      */
     public static void speak(MinecraftServer server, @Nullable RayaPrimeEntity raya, @Nullable ServerPlayer listener,
                              String text, String apiKey, Mood mood) {
+        speak(server, raya, listener, text, apiKey, mood, null);
+    }
+
+    /**
+     * То же, но {@code onStart} (показ реплики в чате) срабатывает ровно один раз В МОМЕНТ, когда звук первого куска
+     * отправлен игроку — текст и голос появляются синхронно. Если озвучка выключена, пуста или не успела за
+     * {@code chatMaxWaitSeconds} — текст показывается сразу.
+     */
+    public static void speak(MinecraftServer server, @Nullable RayaPrimeEntity raya, @Nullable ServerPlayer listener,
+                             String text, String apiKey, Mood mood, @Nullable Runnable onStart) {
+        final java.util.concurrent.atomic.AtomicBoolean shown = new java.util.concurrent.atomic.AtomicBoolean(false);
+        final Runnable once = () -> {
+            if (onStart != null && shown.compareAndSet(false, true)) {
+                try {
+                    onStart.run();
+                } catch (Throwable t) {
+                    RayaPrimeMod.LOGGER.warn("[RayaPrime] Не удалось показать реплику: {}", t.toString());
+                }
+            }
+        };
         final String clean = text == null ? "" : speakable(text);
-        if (!RayaConfig.SPEECH_ENABLED.get() || clean.isBlank()) {
+        if (!RayaConfig.SPEECH_ENABLED.get() || clean.isBlank() || listener == null) {
+            once.run();
             return;
+        }
+        if (onStart != null) {
+            // страховка: если синтез затянулся — показать текст всё равно
+            CompletableFuture.delayedExecutor(RayaConfig.CHAT_MAX_WAIT_SECONDS.get(), java.util.concurrent.TimeUnit.SECONDS)
+                    .execute(() -> server.execute(once));
         }
         final boolean crimson = mood == Mood.CRIMSON;
         final boolean tts = RayaConfig.USE_GEMINI_TTS.get() && apiKey != null && !apiKey.isEmpty();
@@ -162,22 +190,68 @@ public final class RayaVoice {
             default -> 1.0;
         };
 
-        CompletableFuture.runAsync(() -> {
+        // Реплика режется на 2 части: первая (одно предложение) синтезируется и играет сразу, остальное готовится параллельно
+        final List<String> pieces = splitChunks(clean);
+        final UUID chainKey = listenerId != null ? listenerId : NO_LISTENER;
+        CompletableFuture<Void> prev = CHAINS.getOrDefault(chainKey, CompletableFuture.completedFuture(null));
+        for (int i = 0; i < pieces.size(); i++) {
+            final int idx = i;
+            final String piece = pieces.get(i);
+            CompletableFuture<Chunk> fut = CompletableFuture.supplyAsync(
+                    () -> synthPiece(piece, idx, apiKey, tts, voiceName, mood, crimson, speed, volume), TTS_POOL);
+            prev = prev.<Object>handle((v, t) -> null)
+                    .thenCompose(v -> fut)
+                    .thenAccept(ch -> {
+                        if (ch != null) deliver(server, raya, listenerId, ch, once);
+                    });
+        }
+        CHAINS.put(chainKey, prev);
+    }
+
+    private record Chunk(short[] samples, int rate, @Nullable String failure) {}
+
+    private static final java.util.concurrent.ExecutorService TTS_POOL = java.util.concurrent.Executors.newFixedThreadPool(3, r -> {
+        Thread t = new Thread(r, "RayaPrime-TTS");
+        t.setDaemon(true);
+        return t;
+    });
+    private static final Map<UUID, CompletableFuture<Void>> CHAINS = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final UUID NO_LISTENER = new UUID(0L, 0L);
+
+    /** Делит текст на первое предложение и остаток (если текст длинный), чтобы голос начинался раньше. */
+    static List<String> splitChunks(String clean) {
+        if (!RayaConfig.TTS_CHUNKING.get() || clean.length() <= 90) return List.of(clean);
+        int cut = -1;
+        for (int i = 20; i < Math.min(clean.length(), 170); i++) {
+            char c = clean.charAt(i);
+            if (c == '.' || c == '!' || c == '?' || c == '…') {
+                cut = i + 1;
+                break;
+            }
+        }
+        if (cut < 0 || cut >= clean.length() - 12) return List.of(clean);
+        return List.of(clean.substring(0, cut).trim(), clean.substring(cut).trim());
+    }
+
+    /** Синтез одного куска (в фоновом потоке): кэш → Gemini TTS → (только для первого куска) бипы. */
+    private static Chunk synthPiece(String piece, int idx, String apiKey, boolean tts, String voiceName, Mood mood,
+                                    boolean crimson, double speed, double volume) {
+        try {
             String failure = null;
             short[] samples = null;
             int rate = 24000;
-            String key = voiceName + "|" + mood + "|" + clean;
+            String key = voiceName + "|" + mood + "|" + piece;
             GeminiClient.Pcm cached = CACHE.get(key);
             if (cached != null) {
                 samples = cached.samples();
                 rate = cached.rate();
             } else if (tts) {
-                GeminiClient.Pcm pcm = GeminiClient.synthesizeSpeech(apiKey, clean, voiceName,
+                GeminiClient.Pcm pcm = GeminiClient.synthesizeSpeech(apiKey, piece, voiceName,
                         RayaConfig.TTS_STYLE.get() ? styleOf(mood) : "");
                 if (pcm != null && pcm.samples().length > 0) {
-                    samples = pcm.samples();
+                    samples = trimSilence(pcm.samples(), pcm.rate());
                     rate = pcm.rate();
-                    CACHE.put(key, pcm);
+                    CACHE.put(key, new GeminiClient.Pcm(samples, rate));
                 } else {
                     failure = GeminiClient.lastTtsError;
                 }
@@ -185,46 +259,70 @@ public final class RayaVoice {
                 failure = "озвучка Gemini TTS выключена в конфиге";
             }
             if (samples == null) {
-                samples = synthesizeBeeps(clean, crimson);
+                if (idx > 0) return new Chunk(new short[0], 24000, failure); // продолжение без голоса — просто тишина
+                samples = synthesizeBeeps(piece, crimson);
                 rate = 48000;
             } else {
                 samples = GeminiClient.changeSpeed(samples, speed);
             }
-            final short[] out = applyVolume(samples, volume);
-            final int outRate = rate;
-            final String fail = failure;
-            server.execute(() -> {
-                try {
-                    if (raya != null && !raya.isRemoved()) {
-                        raya.setTalkTicks((int) Math.min(20L * 20, out.length * 20L / Math.max(1, outRate)));
+            return new Chunk(applyVolume(samples, volume), rate, failure);
+        } catch (Throwable t) {
+            RayaPrimeMod.LOGGER.warn("[RayaPrime] Сбой синтеза речи: {}", t.toString());
+            return new Chunk(new short[0], 24000, t.toString());
+        }
+    }
+
+    /** Убирает паузы TTS в начале и конце (они дают лишнюю задержку), оставляя короткие запасы. */
+    static short[] trimSilence(short[] s, int rate) {
+        int thr = 350;
+        int start = 0;
+        while (start < s.length && Math.abs(s[start]) < thr) start++;
+        int end = s.length;
+        while (end > start && Math.abs(s[end - 1]) < thr) end--;
+        start = Math.max(0, start - rate / 25);   // ~40 мс запаса
+        end = Math.min(s.length, end + rate / 12); // ~80 мс запаса
+        if (end - start < rate / 10) return s;
+        return java.util.Arrays.copyOfRange(s, start, end);
+    }
+
+    /** Отправка готового куска игроку (серверный поток). */
+    private static void deliver(MinecraftServer server, @Nullable RayaPrimeEntity raya, @Nullable UUID listenerId, Chunk ch,
+                                Runnable once) {
+        server.execute(() -> {
+            try {
+                once.run();
+                final short[] out = ch.samples();
+                final int outRate = ch.rate();
+                ServerPlayer target = listenerId == null ? null : server.getPlayerList().getPlayer(listenerId);
+                if (ch.failure() != null && target != null) {
+                    long now = System.currentTimeMillis();
+                    Long last = LAST_FAIL_NOTICE.get(listenerId);
+                    if (last == null || now - last > 60_000L) {
+                        LAST_FAIL_NOTICE.put(listenerId, now);
+                        String shown = ch.failure().length() > 200 ? ch.failure().substring(0, 200) + "…" : ch.failure();
+                        target.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                                "§7[Райя-Прайм] (голос не получился, говорю бипами: " + shown + ")"));
                     }
-                    ServerPlayer target = listenerId == null ? null : server.getPlayerList().getPlayer(listenerId);
-                    if (fail != null && target != null) {
-                        long now = System.currentTimeMillis();
-                        Long last = LAST_FAIL_NOTICE.get(listenerId);
-                        if (last == null || now - last > 60_000L) {
-                            LAST_FAIL_NOTICE.put(listenerId, now);
-                            String shown = fail.length() > 200 ? fail.substring(0, 200) + "…" : fail;
-                            target.sendSystemMessage(net.minecraft.network.chat.Component.literal(
-                                    "§7[Райя-Прайм] (голос не получился, говорю бипами: " + shown + ")"));
-                        }
-                    }
-                    if (RayaConfig.VOICECHAT_3D_SPEECH.get() && raya != null && raya.isAlive() && !raya.isRemoved()
-                            && isVoiceChatActive() && RayaVoiceChatPlugin.isConnected(listenerId)) {
-                        RayaPrimeMod.LOGGER.info("[RayaPrime] Голос: 3D через Simple Voice Chat ({} сэмплов)", out.length);
-                        RayaVoiceChatPlugin.play(raya, GeminiClient.resampleTo48k(out, outRate));
-                        return;
-                    }
-                    if (target != null) {
-                        RayaPrimeMod.LOGGER.info("[RayaPrime] Голос: отправка клиенту напрямую ({} сэмплов, {} Гц)", out.length, outRate);
-                        PacketDistributor.sendToPlayer(target, new RayaSpeechPayload(toBytes(out, outRate), outRate));
-                    } else {
-                        RayaPrimeMod.LOGGER.warn("[RayaPrime] Голос: игрок недоступен, звук не отправлен");
-                    }
-                } catch (Throwable t) {
-                    RayaPrimeMod.LOGGER.warn("[RayaPrime] Не удалось воспроизвести голос: {}", t.toString());
                 }
-            });
+                if (out.length == 0) return;
+                if (raya != null && !raya.isRemoved()) {
+                    raya.setTalkTicks((int) Math.min(20L * 20, out.length * 20L / Math.max(1, outRate)));
+                }
+                if (RayaConfig.VOICECHAT_3D_SPEECH.get() && raya != null && raya.isAlive() && !raya.isRemoved()
+                        && isVoiceChatActive() && RayaVoiceChatPlugin.isConnected(listenerId)) {
+                    RayaPrimeMod.LOGGER.info("[RayaPrime] Голос: 3D через Simple Voice Chat ({} сэмплов)", out.length);
+                    RayaVoiceChatPlugin.play(raya, GeminiClient.resampleTo48k(out, outRate));
+                    return;
+                }
+                if (target != null) {
+                    RayaPrimeMod.LOGGER.info("[RayaPrime] Голос: отправка клиенту напрямую ({} сэмплов, {} Гц)", out.length, outRate);
+                    PacketDistributor.sendToPlayer(target, new RayaSpeechPayload(toBytes(out, outRate), outRate));
+                } else {
+                    RayaPrimeMod.LOGGER.warn("[RayaPrime] Голос: игрок недоступен, звук не отправлен");
+                }
+            } catch (Throwable t) {
+                RayaPrimeMod.LOGGER.warn("[RayaPrime] Не удалось воспроизвести голос: {}", t.toString());
+            }
         });
     }
 

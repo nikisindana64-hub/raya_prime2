@@ -616,7 +616,7 @@ public final class RayaBuild {
 
         Vec3 center = Vec3.atCenterOf(pos);
         if (raya.distanceToSqr(center) > 20.0D) {
-            raya.getMoveControl().setWantedPosition(center.x, center.y + 2.2D, center.z, 1.5D);
+            raya.flyTo(center.x, center.y + 2.2D, center.z, 1.5D);
             if (++plan.stall > 600) { // не можем долететь — пропускаем блок
                 plan.steps.poll();
                 plan.skipped++;
@@ -715,7 +715,7 @@ public final class RayaBuild {
         }
         Vec3 center = Vec3.atCenterOf(pos);
         if (raya.distanceToSqr(center) > 9.0D) {
-            raya.getMoveControl().setWantedPosition(center.x, center.y + 1.6D, center.z, 1.4D);
+            raya.flyTo(center.x, center.y + 1.6D, center.z, 1.4D);
             return false;
         }
         BlockEntity be = level.getBlockEntity(pos);

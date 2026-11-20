@@ -72,7 +72,7 @@ public class GeminiBrainService {
               "heard": "дословно что сказал игрок (только для голосовых сообщений, иначе пустая строка)",
               "reply": "твоя реплика игроку: 1–3 коротких предложения, без markdown, без эмодзи, без чтения координат вслух (она будет озвучена голосом)",
               "emotion": "NORMAL | HAPPY | THINKING | CRIMSON | HIDING",
-              "anim": "NONE | DANCE | SPIN | NOD | NO | WAVE   (необязательная анимация тела: радость — DANCE/SPIN, согласие — NOD, отказ — NO, приветствие/прощание — WAVE; не злоупотребляй)",
+              "anim": "NONE | DANCE | SPIN | FLIP | NOD | NO | WAVE | LAUGH | SHRUG | THINK | BOW | SALUTE | LOVE   (необязательная анимация тела: радость — DANCE/SPIN/FLIP, смех — LAUGH, согласие — NOD, отказ — NO, не знаю — SHRUG, раздумье — THINK, извинение — BOW, «есть!» — SALUTE, нежность/благодарность — LOVE, приветствие/прощание — WAVE; подбирай по смыслу, но не в каждой реплике)",
               "actions": [ { "type": "...", "target": "...", "x": 0, "y": 0, "z": 0, "count": 1 } ]  (для BUILD ещё: "shape","width","depth","height","roof"; для BUILD_CUSTOM: "name","blocks")
             }
 
@@ -92,6 +92,10 @@ public class GeminiBrainService {
             • CANCEL_BUILD — остановить стройку. • LIGHT_AREA — расставить факелы в тёмных местах вокруг (нужны факелы у меня или у носителя).
             • GUARD — режим охраны: следую за игроком и сама атакую враждебных существ рядом с ним (FOLLOW/STAY отключают охрану).
             • SAVE_WAYPOINT — запомнить место (target — название, напр. "дом", "шахта"; x,y,z — если не указаны, запомню текущее положение игрока). Запомненные места и расстояния до них видны в телеметрии: по ним подсказывай дорогу («дом в 300 блоках на северо-запад»). FLY_TO с target=название места и без координат — подлететь к запомненному месту (если оно не дальше допустимого радиуса).
+            • GUIDE_TO — повести игрока к месту: лечу впереди, обхожу препятствия и жду, если он отстал. target — название запомненного места ИЛИ часть ID блока/руды (найду в просканированных чанках), либо x,y,z. Используй для «веди меня», «покажи дорогу», «проводи до…». STOP_GUIDE — прекратить вести.
+            • REMIND — напоминание: "target" — текст, "minutes" и/или "seconds" — через сколько (до 24 ч). Скажу голосом, когда придёт время.
+            • REMEMBER — запомнить факт о носителе/мире надолго (target — короткая заметка: предпочтения, договорённости, важные места словами). Заметки видны тебе в телеметрии при каждом ответе. Запоминай сама, когда игрок говорит о себе что-то важное или просит «запомни». FORGET — забыть заметку (target — фрагмент текста или "all").
+            • HARVEST — собрать спелый урожай (пшеница, морковь, картофель и т.п.) вокруг игрока и посадить семена заново. • CHOP_TREE — срубить ближайшее дерево целиком (target — порода, напр. "birch", необязательно; x,y,z — конкретное бревно); если у меня есть саженец — посажу.
             • DEPOSIT_ITEMS — сложить вещи из моего инвентаря в ближайший сундук/бочку рядом (target — фильтр или "all").
             • FIND_BLOCK — найти ближайший блок/руду в просканированных чанках вокруг и показать дорогу (target — часть ID или название, напр. "diamond_ore", "spawner"). Подлетаю к нему и называю координаты. Используй для «найди», «где ближайший…».
             • STORE_IN_INVENTORY — свернуться в Ядро в инвентаре носителя (твои вещи сохраняются внутри). • RELEASE — вылететь из Ядра.
@@ -137,7 +141,10 @@ public class GeminiBrainService {
         final MinecraftServer server = player.getServer();
         final JsonObject payload;
         try {
-            if (raya != null) raya.showEmotion(RayaPrimeEntity.EMOTION_THINKING, 600);
+            if (raya != null) {
+                raya.showEmotion(RayaPrimeEntity.EMOTION_THINKING, 600);
+                raya.playAnimation(RayaPrimeEntity.ANIM_THINK, 400);
+            }
             String world = ModKnowledgeScanner.buildWorldAndModContext(player, raya, voice ? "" : userText);
             payload = buildPayload(world, userText, wav, copyHistory(uuid));
         } catch (Throwable t) {
@@ -164,7 +171,10 @@ public class GeminiBrainService {
                 final String shown = msg;
                 server.execute(() -> {
                     IN_FLIGHT.remove(uuid);
-                    if (raya != null) raya.restoreBaseEmotion();
+                    if (raya != null) {
+                        raya.restoreBaseEmotion();
+                        if (raya.getAnimId() == RayaPrimeEntity.ANIM_THINK) raya.stopAnimation();
+                    }
                     player.sendSystemMessage(Component.literal("§c[Райя-Прайм]§r Сбой связи с Gemini: " + shown));
                 });
             }
@@ -281,6 +291,7 @@ public class GeminiBrainService {
             String heard = str(decision, "heard").trim();
             String emotion = str(decision, "emotion").toUpperCase(Locale.ROOT);
             int animId = RayaPrimeEntity.animIdByName(str(decision, "anim"));
+            if (animId == RayaPrimeEntity.ANIM_NONE) animId = RayaPrimeEntity.animForText(reply);
 
             if (voice && reply.isEmpty() && !hasActions(decision)) {
                 if (body != null) body.restoreBaseEmotion(); // речь была не к Рае
@@ -298,8 +309,9 @@ public class GeminiBrainService {
                     }
                 }
             }
-            if (body != null && animId != RayaPrimeEntity.ANIM_NONE) {
-                body.playAnimation(animId, RayaPrimeEntity.animDuration(animId));
+            if (body != null) {
+                if (animId != RayaPrimeEntity.ANIM_NONE) body.playAnimation(animId, RayaPrimeEntity.animDuration(animId));
+                else if (body.getAnimId() == RayaPrimeEntity.ANIM_THINK) body.stopAnimation(); // закончила «думать»
             }
             if (body != null) {
                 switch (emotion) {
@@ -319,8 +331,11 @@ public class GeminiBrainService {
                 if (voice && !heard.isEmpty()) {
                     player.sendSystemMessage(Component.literal("§7[Ты сказал] " + heard));
                 }
-                player.sendSystemMessage(Component.literal(prefix + reply));
-                RayaVoice.speak(player.getServer(), body, player, reply, apiKey, RayaVoice.moodOf(emotion));
+                final String line = prefix + reply;
+                final boolean sync = RayaConfig.SYNC_CHAT_WITH_VOICE.get();
+                if (!sync) player.sendSystemMessage(Component.literal(line));
+                RayaVoice.speak(player.getServer(), body, player, reply, apiKey, RayaVoice.moodOf(emotion),
+                        sync ? () -> player.sendSystemMessage(Component.literal(line)) : null);
                 remember(player.getUUID(), voice ? (heard.isEmpty() ? "(голосовое сообщение)" : heard) : userText, reply);
             }
         } catch (Exception e) {
@@ -480,6 +495,140 @@ public class GeminiBrainService {
                         raya.enqueueTask(new RayaPrimeEntity.RayaTask(RayaPrimeEntity.RayaTask.TaskType.FLY_TO, found, ""));
                     }
                 }
+            }
+            case "GUIDE_TO" -> {
+                BlockPos dest = null;
+                String label = target.isEmpty() ? "" : target;
+                if (hasCoords) {
+                    dest = new BlockPos(x, y, z);
+                } else if (!target.isEmpty()) {
+                    dest = raya.findWaypoint(target);
+                    if (dest == null) {
+                        dest = ModKnowledgeScanner.findNearestBlock(level, player.blockPosition(), target,
+                                RayaConfig.SCAN_RADIUS_CHUNKS.get());
+                    }
+                }
+                if (dest == null) {
+                    raya.tell("Не знаю, куда вести: нужны координаты, название запомненного места или блок из просканированной зоны.");
+                    return raya;
+                }
+                raya.clearTasks();
+                raya.startGuide(dest, label);
+                raya.tell("Веду тебя" + (label.isEmpty() ? "" : " к «" + label + "»") + " ["
+                        + dest.getX() + ", " + dest.getY() + ", " + dest.getZ() + "]. Лечу впереди — следуй за мной!");
+            }
+            case "STOP_GUIDE" -> raya.endGuide();
+            case "HARVEST" -> {
+                setWorkMode(raya);
+                BlockPos c = player.blockPosition();
+                List<BlockPos> crops = new ArrayList<>();
+                for (BlockPos q : BlockPos.betweenClosed(c.offset(-10, -3, -10), c.offset(10, 3, 10))) {
+                    net.minecraft.world.level.block.state.BlockState st = level.getBlockState(q);
+                    if (st.getBlock() instanceof net.minecraft.world.level.block.CropBlock cb && cb.isMaxAge(st)) {
+                        crops.add(q.immutable());
+                    }
+                }
+                crops.sort(java.util.Comparator.comparingDouble(q -> q.distSqr(player.blockPosition())));
+                if (crops.isEmpty()) {
+                    raya.tell("Спелых посевов рядом не вижу.");
+                    return raya;
+                }
+                int n = 0;
+                for (BlockPos q : crops) {
+                    if (n >= 22) break;
+                    net.minecraft.world.level.block.state.BlockState st = level.getBlockState(q);
+                    String cropPath = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(st.getBlock()).getPath();
+                    String seedId = switch (cropPath) {
+                        case "wheat" -> "wheat_seeds";
+                        case "beetroots" -> "beetroot_seeds";
+                        case "carrots" -> "carrot";
+                        case "potatoes" -> "potato";
+                        case "torchflower_crop" -> "torchflower_seeds";
+                        default -> cropPath;
+                    };
+                    if (!raya.enqueueTask(new RayaPrimeEntity.RayaTask(RayaPrimeEntity.RayaTask.TaskType.MINE_BLOCK, q, ""))) break;
+                    raya.enqueueTask(new RayaPrimeEntity.RayaTask(RayaPrimeEntity.RayaTask.TaskType.PLACE_BLOCK, q, seedId));
+                    n++;
+                }
+                raya.tell("Собираю урожай (" + n + " грядок) и сажу заново, что получится.");
+            }
+            case "CHOP_TREE" -> {
+                setWorkMode(raya);
+                BlockPos from = hasCoords ? new BlockPos(x, y, z) : null;
+                BlockPos c = player.blockPosition();
+                if (from == null) {
+                    double best = Double.MAX_VALUE;
+                    for (BlockPos q : BlockPos.betweenClosed(c.offset(-16, -6, -16), c.offset(16, 12, 16))) {
+                        net.minecraft.world.level.block.state.BlockState st = level.getBlockState(q);
+                        if (!st.is(net.minecraft.tags.BlockTags.LOGS)) continue;
+                        if (!target.isEmpty() && !net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(st.getBlock())
+                                .toString().contains(target.toLowerCase(Locale.ROOT))) continue;
+                        double d = q.distSqr(c);
+                        if (d < best) {
+                            best = d;
+                            from = q.immutable();
+                        }
+                    }
+                }
+                if (from == null) {
+                    raya.tell("Деревьев рядом не вижу.");
+                    return raya;
+                }
+                java.util.Set<BlockPos> seen = new java.util.HashSet<>();
+                java.util.ArrayDeque<BlockPos> queue = new java.util.ArrayDeque<>();
+                queue.add(from);
+                seen.add(from);
+                while (!queue.isEmpty() && seen.size() < 64) {
+                    BlockPos cur = queue.poll();
+                    for (BlockPos nb : BlockPos.betweenClosed(cur.offset(-1, -1, -1), cur.offset(1, 1, 1))) {
+                        if (seen.size() >= 64) break;
+                        if (nb.distSqr(from) > 14 * 14) continue;
+                        BlockPos imm = nb.immutable();
+                        if (!seen.contains(imm) && level.getBlockState(imm).is(net.minecraft.tags.BlockTags.LOGS)) {
+                            seen.add(imm);
+                            queue.add(imm);
+                        }
+                    }
+                }
+                List<BlockPos> logs = new ArrayList<>(seen);
+                logs.sort(java.util.Comparator.comparingInt((BlockPos q) -> -q.getY()));
+                int minY = Integer.MAX_VALUE;
+                BlockPos base = from;
+                for (BlockPos q : logs) if (q.getY() < minY) { minY = q.getY(); base = q; }
+                int n = 0;
+                for (BlockPos q : logs) {
+                    if (n >= 40) break;
+                    if (isUnderOwner(player, q)) continue;
+                    if (!raya.enqueueTask(new RayaPrimeEntity.RayaTask(RayaPrimeEntity.RayaTask.TaskType.MINE_BLOCK, q, ""))) break;
+                    n++;
+                }
+                boolean hasSapling = false;
+                for (int i = 0; i < raya.getRayaInventory().getContainerSize(); i++) {
+                    net.minecraft.world.item.ItemStack st = raya.getRayaInventory().getItem(i);
+                    if (!st.isEmpty() && net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(st.getItem()).getPath().contains("sapling")) {
+                        hasSapling = true;
+                        break;
+                    }
+                }
+                if (hasSapling) raya.enqueueTask(new RayaPrimeEntity.RayaTask(RayaPrimeEntity.RayaTask.TaskType.PLACE_BLOCK, base, "sapling"));
+                raya.tell("Валю дерево: " + n + " брёвен" + (hasSapling ? ", потом посажу саженец." : "."));
+            }
+            case "REMIND" -> {
+                int seconds = intOr(act, "seconds", 0) + intOr(act, "minutes", 0) * 60;
+                if (seconds <= 0) seconds = (countObj == null ? 0 : countObj) * 60;
+                seconds = Math.min(seconds, 24 * 3600);
+                if (!raya.addReminder(seconds, target)) {
+                    raya.tell("Не получилось поставить напоминание: нужен текст и время (и не больше 8 штук сразу).");
+                } else {
+                    raya.tell("Хорошо, напомню через " + (seconds >= 90 ? (seconds / 60) + " мин" : seconds + " с") + ": " + target);
+                }
+            }
+            case "REMEMBER" -> {
+                if (!raya.addNote(target)) raya.tell("Что именно запомнить? Скажи подробнее.");
+            }
+            case "FORGET" -> {
+                int n = raya.forgetNotes(target);
+                raya.tell(n > 0 ? "Стёрла из памяти заметок: " + n + "." : "Такой заметки у меня нет.");
             }
             case "GUARD" -> {
                 if (!RayaConfig.ALLOW_COMBAT.get()) {

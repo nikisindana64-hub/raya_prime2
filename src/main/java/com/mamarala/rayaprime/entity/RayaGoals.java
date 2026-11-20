@@ -52,7 +52,7 @@ public class RayaGoals {
             boolean behindBlocks = "HIDE_BEHIND_BLOCKS".equals(raya.getActiveMode());
             Vec3 hideSpot = raya.getHidePositionCached(behindBlocks);
             if (raya.position().distanceToSqr(hideSpot) > 0.5D) {
-                raya.getMoveControl().setWantedPosition(hideSpot.x, hideSpot.y, hideSpot.z, 1.45D);
+                raya.flyTo(hideSpot.x, hideSpot.y, hideSpot.z, 1.45D);
             }
 
             LivingEntity threat = raya.findNearestThreat();
@@ -110,7 +110,7 @@ public class RayaGoals {
                 return;
             }
             raya.getLookControl().setLookAt(target, 30.0F, 30.0F);
-            raya.getMoveControl().setWantedPosition(target.getX(), target.getEyeY(), target.getZ(), 1.4D);
+            raya.flyTo(target.getX(), target.getEyeY(), target.getZ(), 1.4D);
 
             if (attackCooldown > 0) {
                 attackCooldown--;
@@ -163,7 +163,7 @@ public class RayaGoals {
                         raya.completeCurrentTask();
                         return;
                     }
-                    raya.getMoveControl().setWantedPosition(pos.getX() + 0.5, pos.getY() + 1.0, pos.getZ() + 0.5, 1.3D);
+                    raya.flyTo(pos.getX() + 0.5, pos.getY() + 1.0, pos.getZ() + 0.5, 1.3D);
                     if (raya.distanceToSqr(Vec3.atCenterOf(pos)) <= 3.0D) {
                         raya.completeCurrentTask();
                     }
@@ -214,6 +214,39 @@ public class RayaGoals {
         }
     }
 
+    /** Проводник: ведёт игрока к цели, дожидаясь его, если он отстал. */
+    public static class RayaGuideGoal extends Goal {
+        private final RayaPrimeEntity raya;
+
+        public RayaGuideGoal(RayaPrimeEntity raya) {
+            this.raya = raya;
+            this.setFlags(EnumSet.of(Flag.MOVE, Flag.LOOK));
+        }
+
+        @Override
+        public boolean requiresUpdateEveryTick() {
+            return true;
+        }
+
+        @Override
+        public boolean canUse() {
+            if (raya.isAfraid() || raya.getGuideTarget() == null) return false;
+            Player owner = raya.getOwnerPlayer();
+            return owner != null && owner.isAlive() && owner.level() == raya.level();
+        }
+
+        @Override
+        public boolean canContinueToUse() {
+            return canUse();
+        }
+
+        @Override
+        public void tick() {
+            Player owner = raya.getOwnerPlayer();
+            if (owner != null) raya.tickGuideStep(owner);
+        }
+    }
+
     public static class RayaFollowOwnerGoal extends Goal {
         private final RayaPrimeEntity raya;
 
@@ -248,7 +281,7 @@ public class RayaGoals {
                 // Парим чуть сбоку и выше плеча носителя (далеко-далеко — телепорт делает сама Райя в tickReturn)
                 Vec3 right = owner.getLookAngle().cross(new Vec3(0, 1, 0)).normalize().scale(1.4D);
                 Vec3 hoverPos = owner.position().add(right).add(0, 1.55D, 0);
-                raya.getMoveControl().setWantedPosition(hoverPos.x, hoverPos.y, hoverPos.z, 1.2D);
+                raya.flyTo(hoverPos.x, hoverPos.y, hoverPos.z, 1.2D);
             }
         }
     }
