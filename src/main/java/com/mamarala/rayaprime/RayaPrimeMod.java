@@ -10,6 +10,7 @@ import com.mamarala.rayaprime.entity.RayaPrimeEntity;
 import com.mamarala.rayaprime.item.RayaCoreItem;
 import com.mamarala.rayaprime.item.RayaStorage;
 import com.mamarala.rayaprime.network.RayaSpeechClient;
+import com.mamarala.rayaprime.network.RayaPatPayload;
 import com.mamarala.rayaprime.network.RayaSpeechPayload;
 import com.mamarala.rayaprime.scanner.ModKnowledgeScanner;
 import com.mojang.brigadier.arguments.StringArgumentType;
@@ -104,6 +105,7 @@ public class RayaPrimeMod {
     private void registerPayloads(RegisterPayloadHandlersEvent event) {
         PayloadRegistrar registrar = event.registrar("1");
         registrar.playToClient(RayaSpeechPayload.TYPE, RayaSpeechPayload.STREAM_CODEC, RayaSpeechClient::handle);
+        registrar.playToServer(RayaPatPayload.TYPE, RayaPatPayload.STREAM_CODEC, RayaPatPayload::handle);
     }
 
     private void addCreative(BuildCreativeModeTabContentsEvent event) {
@@ -334,14 +336,16 @@ public class RayaPrimeMod {
     @SubscribeEvent
     public void onServerChat(ServerChatEvent event) {
         String raw = event.getRawText().trim();
-        if (!WAKE.matcher(raw).find()) return;
+        boolean wake = WAKE.matcher(raw).find();
+        if (!wake && (!RayaConfig.RESPOND_TO_ALL_CHAT.get() || raw.length() < 2)) return;
         ServerPlayer player = event.getPlayer();
         RayaPrimeEntity raya = findOwnedRaya(player);
         boolean inCore = raya == null && RayaStorage.hasCore(player);
-        LOGGER.info("[RayaPrime] Обращение в чате от {}: {} (Райя в мире: {}, в Ядре: {})", player.getName().getString(), raw, raya != null, inCore);
+        LOGGER.info("[RayaPrime] Сообщение в чате от {}: {} (обращение по имени: {}, Райя в мире: {}, в Ядре: {})",
+                player.getName().getString(), raw, wake, raya != null, inCore);
         if (raya != null || inCore) {
-            GeminiBrainService.processTextRequestAsync(player, raya, raw);
-        } else {
+            GeminiBrainService.processChatAsync(player, raya, raw, !wake);
+        } else if (wake) {
             player.sendSystemMessage(Component.literal(
                     "§c[Райя-Прайм]§r Я не вижу твоей Райи (и Ядра в инвентаре нет). Позови её: /raya summon"));
         }

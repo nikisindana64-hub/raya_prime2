@@ -56,6 +56,25 @@ public final class RayaStorage {
         return true;
     }
 
+    /** Перенести Райю за игроком в другое измерение (сохраняя инвентарь, заметки, места). Возвращает новое тело. */
+    public static RayaPrimeEntity transfer(ServerPlayer player, RayaPrimeEntity old) {
+        CompoundTag tag = new CompoundTag();
+        old.saveWithoutId(tag);
+        tag.remove("UUID");
+        old.clearTasks();
+        old.discard();
+        ServerLevel level = player.serverLevel();
+        RayaPrimeEntity raya = RayaPrimeMod.RAYA_PRIME.get().create(level);
+        if (raya == null) return null;
+        raya.load(tag);
+        raya.setOwnerUUID(player.getUUID());
+        raya.moveTo(player.getX() + 1.2, player.getY() + 1.4, player.getZ() + 1.2, player.getYRot(), 0.0F);
+        raya.setDeltaMovement(0, 0, 0);
+        raya.setActiveMode("FOLLOW");
+        level.addFreshEntity(raya);
+        return raya;
+    }
+
     /** Выпустить Райю из Ядра рядом с игроком. Стек уменьшается на 1. */
     public static boolean release(ServerPlayer player, ItemStack core) {
         if (core.isEmpty()) return false;

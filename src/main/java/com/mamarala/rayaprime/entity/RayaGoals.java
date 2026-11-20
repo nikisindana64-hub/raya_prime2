@@ -178,6 +178,11 @@ public class RayaGoals {
                         raya.completeCurrentTask();
                     }
                 }
+                case USE_BLOCK -> {
+                    if (raya.tickUseBlock(pos)) {
+                        raya.completeCurrentTask();
+                    }
+                }
             }
         }
     }

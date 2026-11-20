@@ -34,6 +34,17 @@ public class RayaPrimeModel extends EntityModel<RayaPrimeEntity> {
     private final ModelPart rightEar;
     private final ModelPart leftArm;
     private final ModelPart rightArm;
+    private final ModelPart leftEye;
+    private final ModelPart rightEye;
+    private final ModelPart mouthMid;
+    private final ModelPart mouthL;
+    private final ModelPart mouthR;
+    private final ModelPart antenna;
+    private final ModelPart flame;
+    private final ModelPart lFingerA;
+    private final ModelPart lFingerB;
+    private final ModelPart rFingerA;
+    private final ModelPart rFingerB;
 
     public RayaPrimeModel(ModelPart root) {
         this.root = root.getChild("root");
@@ -42,6 +53,17 @@ public class RayaPrimeModel extends EntityModel<RayaPrimeEntity> {
         this.rightEar = this.coreCube.getChild("right_ear");
         this.leftArm = this.coreCube.getChild("left_arm");
         this.rightArm = this.coreCube.getChild("right_arm");
+        this.leftEye = this.coreCube.getChild("left_eye");
+        this.rightEye = this.coreCube.getChild("right_eye");
+        this.mouthMid = this.coreCube.getChild("mouth_mid");
+        this.mouthL = this.coreCube.getChild("mouth_l");
+        this.mouthR = this.coreCube.getChild("mouth_r");
+        this.antenna = this.coreCube.getChild("antenna");
+        this.flame = this.coreCube.getChild("flame");
+        this.lFingerA = this.leftArm.getChild("finger_a");
+        this.lFingerB = this.leftArm.getChild("finger_b");
+        this.rFingerA = this.rightArm.getChild("finger_a");
+        this.rFingerB = this.rightArm.getChild("finger_b");
     }
 
     public static LayerDefinition createBodyLayer() {
@@ -51,38 +73,79 @@ public class RayaPrimeModel extends EntityModel<RayaPrimeEntity> {
         PartDefinition root = partRoot.addOrReplaceChild("root", CubeListBuilder.create(),
                 PartPose.offset(0.0F, 16.0F, 0.0F));
 
-        // Центральный куб корпуса 8x8x8
+        // Корпус 8x8x8 + внешняя рамка, экран, световая полоса, задний и нижний двигатели
         PartDefinition coreCube = root.addOrReplaceChild("core_cube",
                 CubeListBuilder.create()
                         .texOffs(0, 0).addBox(-4.0F, -4.0F, -4.0F, 8.0F, 8.0F, 8.0F, new CubeDeformation(0.0F))
-                        // Задний и нижний двигатели
-                        .texOffs(0, 32).addBox(-2.5F, -2.0F, 4.0F, 5.0F, 4.0F, 2.5F, new CubeDeformation(0.0F))
-                        .texOffs(16, 32).addBox(-2.5F, 4.0F, -2.5F, 5.0F, 2.0F, 5.0F, new CubeDeformation(0.0F)),
+                        .texOffs(0, 16).addBox(-4.0F, -4.0F, -4.0F, 8.0F, 8.0F, 8.0F, new CubeDeformation(0.3F))
+                        .texOffs(32, 0).addBox(-3.0F, -3.3F, -5.0F, 6.0F, 5.0F, 1.0F, new CubeDeformation(0.0F))
+                        .texOffs(64, 24).addBox(-3.0F, 2.2F, -4.6F, 6.0F, 1.0F, 1.0F, new CubeDeformation(0.0F))
+                        .texOffs(64, 0).addBox(-2.0F, -2.0F, 4.0F, 4.0F, 4.0F, 2.0F, new CubeDeformation(0.0F))
+                        .texOffs(64, 8).addBox(-2.0F, 4.0F, -2.0F, 4.0F, 2.0F, 4.0F, new CubeDeformation(0.0F)),
                 PartPose.ZERO);
 
-        // Левое и правое "ушки" для выражения эмоций Раи
+        // Пламя нижнего двигателя (масштабируется по Y)
+        coreCube.addOrReplaceChild("flame",
+                CubeListBuilder.create().texOffs(64, 16).addBox(-1.5F, 0.0F, -1.5F, 3.0F, 2.0F, 3.0F, new CubeDeformation(0.0F)),
+                PartPose.offset(0.0F, 6.0F, 0.0F));
+
+        // Антенна с огоньком
+        coreCube.addOrReplaceChild("antenna",
+                CubeListBuilder.create()
+                        .texOffs(40, 16).addBox(-0.5F, -3.0F, -0.5F, 1.0F, 3.0F, 1.0F, new CubeDeformation(0.0F))
+                        .texOffs(40, 24).addBox(-1.0F, -5.0F, -1.0F, 2.0F, 2.0F, 2.0F, new CubeDeformation(0.0F)),
+                PartPose.offset(0.0F, -4.2F, 1.5F));
+
+        // «Ушки» с светящимися кончиками
         coreCube.addOrReplaceChild("left_ear",
                 CubeListBuilder.create()
-                        .texOffs(0, 18).addBox(-1.0F, -4.0F, -1.5F, 3.0F, 4.0F, 3.0F, new CubeDeformation(0.0F)),
-                PartPose.offsetAndRotation(3.5F, -3.5F, 0.0F, 0.0F, 0.0F, 0.25F));
-
+                        .texOffs(0, 32).addBox(-1.0F, -5.0F, -1.0F, 2.0F, 5.0F, 2.0F, new CubeDeformation(0.0F))
+                        .texOffs(8, 32).addBox(-1.0F, -6.0F, -1.0F, 2.0F, 1.0F, 2.0F, new CubeDeformation(0.0F)),
+                PartPose.offsetAndRotation(3.2F, -3.8F, 0.0F, 0.0F, 0.0F, 0.25F));
         coreCube.addOrReplaceChild("right_ear",
                 CubeListBuilder.create()
-                        .texOffs(16, 18).addBox(-2.0F, -4.0F, -1.5F, 3.0F, 4.0F, 3.0F, new CubeDeformation(0.0F)),
-                PartPose.offsetAndRotation(-3.5F, -3.5F, 0.0F, 0.0F, 0.0F, -0.25F));
+                        .texOffs(16, 32).addBox(-1.0F, -5.0F, -1.0F, 2.0F, 5.0F, 2.0F, new CubeDeformation(0.0F))
+                        .texOffs(24, 32).addBox(-1.0F, -6.0F, -1.0F, 2.0F, 1.0F, 2.0F, new CubeDeformation(0.0F)),
+                PartPose.offsetAndRotation(-3.2F, -3.8F, 0.0F, 0.0F, 0.0F, -0.25F));
 
-        // Боковые манипуляторы ПМ-фабрикатора
-        coreCube.addOrReplaceChild("left_arm",
-                CubeListBuilder.create()
-                        .texOffs(0, 40).addBox(0.0F, 0.0F, -2.0F, 1.5F, 3.5F, 4.0F, new CubeDeformation(0.0F)),
-                PartPose.offset(4.1F, 1.0F, -0.5F));
+        // Лицо: глаза и рот (светящиеся кубики на экране, меняются по эмоциям)
+        coreCube.addOrReplaceChild("left_eye",
+                CubeListBuilder.create().texOffs(32, 8).addBox(-1.0F, -1.0F, -1.0F, 2.0F, 2.0F, 1.0F, new CubeDeformation(0.0F)),
+                PartPose.offset(1.6F, -1.3F, -5.0F));
+        coreCube.addOrReplaceChild("right_eye",
+                CubeListBuilder.create().texOffs(32, 8).addBox(-1.0F, -1.0F, -1.0F, 2.0F, 2.0F, 1.0F, new CubeDeformation(0.0F)),
+                PartPose.offset(-1.6F, -1.3F, -5.0F));
+        coreCube.addOrReplaceChild("mouth_mid",
+                CubeListBuilder.create().texOffs(32, 12).addBox(-1.0F, -0.5F, -1.0F, 2.0F, 1.0F, 1.0F, new CubeDeformation(0.0F)),
+                PartPose.offset(0.0F, 0.8F, -5.0F));
+        coreCube.addOrReplaceChild("mouth_l",
+                CubeListBuilder.create().texOffs(32, 15).addBox(-0.5F, -0.5F, -1.0F, 1.0F, 1.0F, 1.0F, new CubeDeformation(0.0F)),
+                PartPose.offset(1.5F, 0.8F, -5.0F));
+        coreCube.addOrReplaceChild("mouth_r",
+                CubeListBuilder.create().texOffs(32, 15).addBox(-0.5F, -0.5F, -1.0F, 1.0F, 1.0F, 1.0F, new CubeDeformation(0.0F)),
+                PartPose.offset(-1.5F, 0.8F, -5.0F));
 
-        coreCube.addOrReplaceChild("right_arm",
-                CubeListBuilder.create()
-                        .texOffs(16, 40).addBox(-1.5F, 0.0F, -2.0F, 1.5F, 3.5F, 4.0F, new CubeDeformation(0.0F)),
-                PartPose.offset(-4.1F, 1.0F, -0.5F));
+        // Манипуляторы ПМ-фабрикатора с двумя пальцами-«клешнями»
+        PartDefinition leftArm = coreCube.addOrReplaceChild("left_arm",
+                CubeListBuilder.create().texOffs(0, 48).addBox(0.0F, 0.0F, -1.0F, 2.0F, 4.0F, 2.0F, new CubeDeformation(0.0F)),
+                PartPose.offset(4.2F, 0.5F, -0.5F));
+        leftArm.addOrReplaceChild("finger_a",
+                CubeListBuilder.create().texOffs(8, 48).addBox(0.0F, 0.0F, -0.5F, 1.0F, 2.0F, 1.0F, new CubeDeformation(0.0F)),
+                PartPose.offset(0.0F, 4.0F, 0.0F));
+        leftArm.addOrReplaceChild("finger_b",
+                CubeListBuilder.create().texOffs(8, 48).addBox(0.0F, 0.0F, -0.5F, 1.0F, 2.0F, 1.0F, new CubeDeformation(0.0F)),
+                PartPose.offset(1.0F, 4.0F, 0.0F));
+        PartDefinition rightArm = coreCube.addOrReplaceChild("right_arm",
+                CubeListBuilder.create().texOffs(16, 48).addBox(-2.0F, 0.0F, -1.0F, 2.0F, 4.0F, 2.0F, new CubeDeformation(0.0F)),
+                PartPose.offset(-4.2F, 0.5F, -0.5F));
+        rightArm.addOrReplaceChild("finger_a",
+                CubeListBuilder.create().texOffs(24, 48).addBox(0.0F, 0.0F, -0.5F, 1.0F, 2.0F, 1.0F, new CubeDeformation(0.0F)),
+                PartPose.offset(-2.0F, 4.0F, 0.0F));
+        rightArm.addOrReplaceChild("finger_b",
+                CubeListBuilder.create().texOffs(24, 48).addBox(0.0F, 0.0F, -0.5F, 1.0F, 2.0F, 1.0F, new CubeDeformation(0.0F)),
+                PartPose.offset(-1.0F, 4.0F, 0.0F));
 
-        return LayerDefinition.create(mesh, 64, 64);
+        return LayerDefinition.create(mesh, 128, 128);
     }
 
     @Override
@@ -222,6 +285,80 @@ public class RayaPrimeModel extends EntityModel<RayaPrimeEntity> {
                 default -> { }
             }
         }
+
+        updateFace(entity, ageInTicks, limbSwingAmount);
+    }
+
+    /** Живое лицо: глаза/рот по эмоции и анимации, моргание, рот при речи, антенна, пальцы, пламя. */
+    private void updateFace(RayaPrimeEntity entity, float age, float limb) {
+        int emotion = entity.getEmotionState();
+        int anim = entity.isAnimActive() ? entity.getAnimId() : RayaPrimeEntity.ANIM_NONE;
+        float lSy = 1.0F, rSy = 1.0F, lSx = 1.0F, rSx = 1.0F;
+        float eyeY = -1.3F, slant = 0.0F, smile = 0.5F, mouthW = 1.0F, mouthOpen = 1.0F, eyeShake = 0.0F, eyeDx = 0.0F;
+
+        switch (emotion) {
+            case RayaPrimeEntity.EMOTION_HAPPY -> { lSy = rSy = 0.45F; eyeY = -1.5F; slant = -0.3F; smile = 1.2F; mouthOpen = 1.4F; }
+            case RayaPrimeEntity.EMOTION_THINKING -> { lSy = lSx = 0.85F; rSy = rSx = 1.35F; smile = 0.0F; mouthW = 0.6F; eyeDx = 0.4F; }
+            case RayaPrimeEntity.EMOTION_CRIMSON -> { lSy = rSy = 0.6F; slant = 0.5F; smile = -0.9F; mouthW = 1.4F; }
+            case RayaPrimeEntity.EMOTION_HIDING -> { lSx = rSx = 1.3F; lSy = rSy = 1.5F; smile = -1.2F; mouthW = 1.5F; eyeShake = 0.15F; }
+            default -> { }
+        }
+        switch (anim) {
+            case RayaPrimeEntity.ANIM_LAUGH, RayaPrimeEntity.ANIM_DANCE, RayaPrimeEntity.ANIM_LOVE, RayaPrimeEntity.ANIM_FLIP -> {
+                lSy = rSy = 0.4F; eyeY = -1.5F; slant = -0.35F; smile = 1.3F; mouthOpen = 1.6F;
+            }
+            case RayaPrimeEntity.ANIM_THINK -> { lSy = lSx = 0.85F; rSy = rSx = 1.35F; smile = 0.0F; mouthW = 0.6F; eyeDx = 0.4F; }
+            case RayaPrimeEntity.ANIM_TREMBLE -> { lSx = rSx = 1.3F; lSy = rSy = 1.5F; smile = -1.2F; mouthW = 1.5F; eyeShake = 0.15F; }
+            case RayaPrimeEntity.ANIM_SHRUG -> smile = -0.3F;
+            case RayaPrimeEntity.ANIM_NO -> { smile = -0.6F; slant = 0.3F; }
+            case RayaPrimeEntity.ANIM_BOW -> lSy = rSy = 0.2F;
+            default -> { }
+        }
+        // моргание раз в ~5 секунд (у каждой Раи свой сдвиг)
+        int phase = (int) (age + entity.getId() * 13) % 100;
+        if (phase < 3 && lSy > 0.5F) {
+            lSy *= 0.12F;
+            rSy *= 0.12F;
+        }
+        // говорит — рот открывается и закрывается
+        if (entity.isTalking()) {
+            mouthOpen = 1.0F + 1.7F * Math.abs(Mth.sin(age * 0.95F));
+        }
+        float shake = eyeShake * Mth.sin(age * 2.7F);
+
+        this.leftEye.y = eyeY;
+        this.rightEye.y = eyeY;
+        this.leftEye.x = 1.6F + eyeDx + shake;
+        this.rightEye.x = -1.6F + eyeDx + shake;
+        this.leftEye.xScale = lSx;
+        this.leftEye.yScale = lSy;
+        this.rightEye.xScale = rSx;
+        this.rightEye.yScale = rSy;
+        this.leftEye.zRot = -slant;
+        this.rightEye.zRot = slant;
+
+        float cornerY = 0.8F - smile * 0.9F;
+        float cornerX = 1.5F * mouthW;
+        this.mouthMid.xScale = mouthW;
+        this.mouthMid.yScale = mouthOpen;
+        this.mouthL.x = cornerX;
+        this.mouthR.x = -cornerX;
+        this.mouthL.y = cornerY;
+        this.mouthR.y = cornerY;
+
+        // антенна покачивается, отклоняется при полёте; пальцы живут своей жизнью
+        boolean fast = anim == RayaPrimeEntity.ANIM_THINK || anim == RayaPrimeEntity.ANIM_LAUGH;
+        this.antenna.zRot = Mth.sin(age * (fast ? 0.5F : 0.1F)) * 0.12F;
+        this.antenna.xRot = -Mth.clamp(limb, 0.0F, 1.0F) * 0.4F;
+        this.flame.yScale = 0.6F + 0.4F * Math.abs(Mth.sin(age * 0.8F)) + Mth.clamp(limb, 0.0F, 1.0F) * 1.2F;
+
+        float open = 0.15F + Mth.sin(age * 0.15F) * 0.05F;
+        if (anim == RayaPrimeEntity.ANIM_WORK) open = 0.1F + 0.55F * Math.abs(Mth.sin(age * 0.6F));
+        else if (anim == RayaPrimeEntity.ANIM_WAVE || anim == RayaPrimeEntity.ANIM_SALUTE) open = 0.4F;
+        this.lFingerA.zRot = open;
+        this.lFingerB.zRot = -open;
+        this.rFingerA.zRot = open;
+        this.rFingerB.zRot = -open;
     }
 
     @Override

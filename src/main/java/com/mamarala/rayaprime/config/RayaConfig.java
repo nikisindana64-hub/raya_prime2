@@ -34,6 +34,11 @@ public class RayaConfig {
     public static final ModConfigSpec.IntValue MAX_TASK_DISTANCE;
     public static final ModConfigSpec.IntValue RETURN_DISTANCE;
     public static final ModConfigSpec.BooleanValue ALLOW_COMMANDS;
+    public static final ModConfigSpec.BooleanValue RESPOND_TO_ALL_CHAT;
+    public static final ModConfigSpec.BooleanValue EVENT_REACTIONS;
+    public static final ModConfigSpec.BooleanValue PAT_REACTIONS;
+    public static final ModConfigSpec.BooleanValue ALLOW_USE_BLOCKS;
+    public static final ModConfigSpec.BooleanValue FOLLOW_ACROSS_DIMENSIONS;
     public static final ModConfigSpec.IntValue MAX_BUILD_BLOCKS;
     public static final ModConfigSpec.BooleanValue BUILD_FROM_OWNER_INVENTORY;
     public static final ModConfigSpec.BooleanValue FREE_BUILD_IN_CREATIVE;
@@ -174,6 +179,22 @@ public class RayaConfig {
         IDLE_CHATTER_MINUTES = BUILDER
                 .comment("Примерная пауза между её самостоятельными репликами (минуты).")
                 .defineInRange("idleChatterMinutes", 4, 1, 60);
+        RESPOND_TO_ALL_CHAT = BUILDER
+                .comment("Райя отвечает на ВСЕ твои сообщения в чате, а не только начинающиеся с «Рая, …».",
+                        "Если на сервере несколько игроков и сообщение явно не к ней — она промолчит. Выключи, чтобы отвечала только на «Рая, …».")
+                .define("respondToAllChat", true);
+        EVENT_REACTIONS = BUILDER
+                .comment("Райя сама реагирует на события: достижения, смена измерения, победа над боссом, пробуждение, твоя смерть.")
+                .define("eventReactions", true);
+        PAT_REACTIONS = BUILDER
+                .comment("Реакция на поглаживание (Shift + ПКМ пустой рукой; работает и вместе с модом PatPat, и без него).")
+                .define("patReactions", true);
+        ALLOW_USE_BLOCKS = BUILDER
+                .comment("Райя может нажимать кнопки, рычаги, открывать двери/люки/калитки и играть на нотных блоках по просьбе.")
+                .define("allowUseBlocks", true);
+        FOLLOW_ACROSS_DIMENSIONS = BUILDER
+                .comment("Райя сама переходит за тобой в другое измерение (Незер, Энд, модовые).")
+                .define("followAcrossDimensions", true);
         BUILDER.pop();
 
         BUILDER.push("fear");

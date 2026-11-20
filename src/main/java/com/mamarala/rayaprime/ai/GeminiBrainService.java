@@ -67,6 +67,8 @@ public class GeminiBrainService {
             СТРАХ: если в телеметрии есть пометка «ТЕБЕ СТРАШНО» — рядом очень опасное существо (босс, монстр сюжетного мода). Ты прячешься сама, говоришь, что тебе страшно, и советуешь носителю уходить/готовиться. Не лети в бой и не высовывайся, пока опасность не пройдёт.
             ЯДРО: по просьбе («вернись в инвентарь», «спрячься в инвентарь», «в ядро») ты сворачиваешься в Ядро — предмет в инвентаре игрока (действие STORE_IN_INVENTORY). В таком виде у тебя нет тела: ты только слушаешь и разговариваешь, но видишь окружение вокруг носителя. Чтобы снова вылететь (по просьбе «вылезай», «выходи», «лети ко мне») — действие RELEASE. Если ты в Ядре, а просят физическое действие (ломать, носить, летать) — сначала RELEASE.
 
+            ЧАТ: ты слышишь ВСЕ сообщения владельца в чате (необязательно, что он назвал тебя по имени) — общайся как живой собеседник и компаньон, поддерживай разговор, шути, интересуйся. Если в телеметрии сказано, что на сервере несколько игроков, и сообщение явно адресовано другому живому игроку (не тебе) — молчи: "reply": "" и "actions": []. Действуй по собственной инициативе в разумных пределах: если владелец жалуется на темноту — предложи/сделай LIGHT_AREA, на голод — подскажи еду, на врагов — GUARD, но без дерзких самовольных действий вроде ломания чужого. Ещё ты сама реагируешь на события мира (достижения, смена измерения, боссы) — это делается без твоего участия.
+
             ФОРМАТ ОТВЕТА — СТРОГО один JSON-объект, без markdown и пояснений вокруг:
             {
               "heard": "дословно что сказал игрок (только для голосовых сообщений, иначе пустая строка)",
@@ -95,6 +97,7 @@ public class GeminiBrainService {
             • GUIDE_TO — повести игрока к месту: лечу впереди, обхожу препятствия и жду, если он отстал. target — название запомненного места ИЛИ часть ID блока/руды (найду в просканированных чанках), либо x,y,z. Используй для «веди меня», «покажи дорогу», «проводи до…». STOP_GUIDE — прекратить вести.
             • REMIND — напоминание: "target" — текст, "minutes" и/или "seconds" — через сколько (до 24 ч). Скажу голосом, когда придёт время.
             • REMEMBER — запомнить факт о носителе/мире надолго (target — короткая заметка: предпочтения, договорённости, важные места словами). Заметки видны тебе в телеметрии при каждом ответе. Запоминай сама, когда игрок говорит о себе что-то важное или просит «запомни». FORGET — забыть заметку (target — фрагмент текста или "all").
+            • USE_BLOCK — подлететь и нажать кнопку, дёрнуть рычаг, открыть/закрыть дверь, люк, калитку или сыграть на нотном блоке (x,y,z блока; без координат — тот, на который смотрит игрок).
             • HARVEST — собрать спелый урожай (пшеница, морковь, картофель и т.п.) вокруг игрока и посадить семена заново. • CHOP_TREE — срубить ближайшее дерево целиком (target — порода, напр. "birch", необязательно; x,y,z — конкретное бревно); если у меня есть саженец — посажу.
             • DEPOSIT_ITEMS — сложить вещи из моего инвентаря в ближайший сундук/бочку рядом (target — фильтр или "all").
             • FIND_BLOCK — найти ближайший блок/руду в просканированных чанках вокруг и показать дорогу (target — часть ID или название, напр. "diamond_ore", "spawner"). Подлетаю к нему и называю координаты. Используй для «найди», «где ближайший…».
@@ -113,15 +116,29 @@ public class GeminiBrainService {
     // ------------------------------------------------------------------ вход
 
     public static void processTextRequestAsync(ServerPlayer player, @Nullable RayaPrimeEntity raya, String userText) {
-        submit(player, raya, userText, null);
+        submit(player, raya, userText, null, false);
+    }
+
+    /** Сообщение из чата; casual = без обращения по имени (она сама решает, отвечать ли). */
+    public static void processChatAsync(ServerPlayer player, @Nullable RayaPrimeEntity raya, String userText, boolean casual) {
+        submit(player, raya, userText, null, casual);
     }
 
     public static void processVoiceAudioAsync(ServerPlayer player, @Nullable RayaPrimeEntity raya, byte[] wavBytes) {
-        submit(player, raya, "", wavBytes);
+        submit(player, raya, "", wavBytes, false);
+    }
+
+    /** Сообщения, пришедшие, пока обрабатывался предыдущий запрос: {текст, "1" если без обращения}. */
+    private static final Map<UUID, String[]> PENDING = new ConcurrentHashMap<>();
+
+    private static void flushPending(ServerPlayer player) {
+        String[] p = PENDING.remove(player.getUUID());
+        if (p == null) return;
+        submit(player, RayaPrimeMod.findOwnedRaya(player), p[0], null, "1".equals(p[1]));
     }
 
     /** Вызывать из серверного потока. */
-    private static void submit(ServerPlayer player, @Nullable RayaPrimeEntity raya, String userText, byte[] wav) {
+    private static void submit(ServerPlayer player, @Nullable RayaPrimeEntity raya, String userText, byte[] wav, boolean casual) {
         final boolean voice = wav != null;
         final UUID uuid = player.getUUID();
         final String apiKey = RayaConfig.getEffectiveApiKey();
@@ -131,8 +148,20 @@ public class GeminiBrainService {
         }
         long now = System.currentTimeMillis();
         Long last = LAST_REQUEST_MS.get(uuid);
-        if (IN_FLIGHT.contains(uuid) || (last != null && now - last < MIN_REQUEST_GAP_MS)) {
-            if (!voice) player.sendSystemMessage(Component.literal("§b[Райя-Прайм]§r Секунду, я ещё обрабатываю предыдущий запрос…"));
+        if (IN_FLIGHT.contains(uuid)) {
+            // не теряем сообщение: отвечу, как только закончу с предыдущим
+            if (!voice) {
+                PENDING.merge(uuid, new String[]{userText, casual ? "1" : "0"},
+                        (a, b) -> new String[]{a[0] + "\n" + b[0], "1".equals(a[1]) && "1".equals(b[1]) ? "1" : "0"});
+            }
+            return;
+        }
+        if (last != null && now - last < MIN_REQUEST_GAP_MS) {
+            if (!voice) {
+                final MinecraftServer srv = player.getServer();
+                CompletableFuture.delayedExecutor(MIN_REQUEST_GAP_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+                        .execute(() -> srv.execute(() -> submit(player, RayaPrimeMod.findOwnedRaya(player), userText, null, casual)));
+            }
             return;
         }
         IN_FLIGHT.add(uuid);
@@ -162,7 +191,8 @@ public class GeminiBrainService {
                 String json = GeminiClient.generateJson(apiKey, payload);
                 server.execute(() -> {
                     IN_FLIGHT.remove(uuid);
-                    applyDecision(player, raya, json, userText, voice, apiKey);
+                    applyDecision(player, raya, json, userText, voice, casual, apiKey);
+                    flushPending(player);
                 });
             } catch (Throwable e) {
                 RayaPrimeMod.LOGGER.error("[RayaPrime] Ошибка обращения к Gemini API", e);
@@ -176,6 +206,7 @@ public class GeminiBrainService {
                         if (raya.getAnimId() == RayaPrimeEntity.ANIM_THINK) raya.stopAnimation();
                     }
                     player.sendSystemMessage(Component.literal("§c[Райя-Прайм]§r Сбой связи с Gemini: " + shown));
+                    PENDING.remove(uuid);
                 });
             }
         });
@@ -281,7 +312,8 @@ public class GeminiBrainService {
     }
 
     private static void applyDecision(ServerPlayer player, @Nullable RayaPrimeEntity startBody, String rawJson,
-                                      String userText, boolean voice, String apiKey) {
+                                      String userText, boolean voice, boolean casual, String apiKey) {
+        final boolean quietOk = voice || casual; // ей можно промолчать, если речь не к ней
         RayaPrimeEntity body = (startBody != null && !startBody.isRemoved()) ? startBody : null;
         COMMANDS_THIS_TICK.remove(player.getUUID());
         try {
@@ -293,7 +325,7 @@ public class GeminiBrainService {
             int animId = RayaPrimeEntity.animIdByName(str(decision, "anim"));
             if (animId == RayaPrimeEntity.ANIM_NONE) animId = RayaPrimeEntity.animForText(reply);
 
-            if (voice && reply.isEmpty() && !hasActions(decision)) {
+            if (quietOk && reply.isEmpty() && !hasActions(decision)) {
                 if (body != null) body.restoreBaseEmotion(); // речь была не к Рае
                 return;
             }
@@ -322,7 +354,7 @@ public class GeminiBrainService {
                 }
             }
 
-            if (reply.isEmpty() && !voice) {
+            if (reply.isEmpty() && !quietOk) {
                 player.sendSystemMessage(Component.literal("§b[Райя-Прайм]§7 (Gemini вернул пустую реплику)"));
             }
             if (!reply.isEmpty()) {
@@ -518,6 +550,15 @@ public class GeminiBrainService {
                         + dest.getX() + ", " + dest.getY() + ", " + dest.getZ() + "]. Лечу впереди — следуй за мной!");
             }
             case "STOP_GUIDE" -> raya.endGuide();
+            case "USE_BLOCK" -> {
+                BlockPos at = hasCoords ? new BlockPos(x, y, z) : lookedAtBlock(player);
+                if (at == null) {
+                    raya.tell("Не вижу, какую кнопку/рычаг/дверь нажать. Укажи место или посмотри на неё.");
+                    return raya;
+                }
+                setWorkMode(raya);
+                raya.enqueueTask(new RayaPrimeEntity.RayaTask(RayaPrimeEntity.RayaTask.TaskType.USE_BLOCK, at, ""));
+            }
             case "HARVEST" -> {
                 setWorkMode(raya);
                 BlockPos c = player.blockPosition();

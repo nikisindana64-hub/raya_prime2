@@ -135,6 +135,9 @@ public class RayaPrimeEntity extends PathfinderMob {
     private RayaBuild.Plan buildPlan = null;
     private boolean guardMode = false;
     private int petCooldown = 0;
+    private int patStreak = 0;
+    private long lastPatTime = -1000L;
+    private int reactCooldown = 0;
     private final Map<String, BlockPos> waypoints = new LinkedHashMap<>();
     private int healCooldownTicks = 0;
     private int warnCooldownTicks = 0;
@@ -279,14 +282,7 @@ public class RayaPrimeEntity extends PathfinderMob {
             }
             if (serverPlayer.isShiftKeyDown() && serverPlayer.getItemInHand(hand).isEmpty()) {
                 // Shift + ПКМ пустой рукой — погладить
-                if (this.petCooldown <= 0) {
-                    this.petCooldown = 100;
-                    String[] lines = {"Ой, приятно! Мои ушки это любят.", "Хи-хи, носитель, ты ласковый сегодня.",
-                            "Систему охлаждения заклинило от счастья!", "Ещё! Шучу. Но ещё немножко можно.",
-                            "Фиксирую рост настроения: плюс 87 процентов."};
-                    playAnimation(ANIM_LOVE, animDuration(ANIM_LOVE));
-                    say(lines[this.random.nextInt(lines.length)], RayaVoice.Mood.HAPPY);
-                }
+                onPatted(serverPlayer);
                 return InteractionResult.CONSUME;
             }
             serverPlayer.openMenu(new SimpleMenuProvider(
@@ -1125,6 +1121,7 @@ public class RayaPrimeEntity extends PathfinderMob {
     // --- Забота: предупреждения и ремонтный импульс
 
     private void tickCare() {
+        if (this.reactCooldown > 0) this.reactCooldown -= 20;
         if (this.healCooldownTicks > 0) this.healCooldownTicks -= 20;
         if (this.warnCooldownTicks > 0) this.warnCooldownTicks -= 20;
         Player owner = getOwnerPlayer();
@@ -1364,6 +1361,79 @@ public class RayaPrimeEntity extends PathfinderMob {
         }
     }
 
+    // ---------- Поглаживание и реакции на события ----------
+
+    private static final String[] PAT_LINES = {"Ой, приятно! Мои ушки это любят.", "Хи-хи, носитель, ты ласковый сегодня.",
+            "Систему охлаждения заклинило от счастья!", "Фиксирую рост настроения: плюс 87 процентов.",
+            "Мур. То есть, гм, звуковой сигнал удовлетворения.", "Эй, так и до перегрева недалеко. Но не останавливайся."};
+    private static final String[] PAT_MANY_LINES = {"Ты так меня совсем разбалуешь!", "Ушки гудят от счастья, остановись, а то взлечу!",
+            "Рекорд поглаживаний обновлён. Я, между прочим, лучшая П.Е.Р.С.И.К.!"};
+    private static final String[] PAT_OVERLOAD_LINES = {"Хватит-хватит, у меня перегрев ушек! Ну... ещё чуть-чуть.", "Всё, я растаяла. Серьёзно, процессор плавится!"};
+
+    /** Погладили: сердечки, радость и (не слишком часто) реплика. Вызывается и от Shift+ПКМ, и от клиента (PatPat). */
+    public void onPatted(Player by) {
+        if (!(this.level() instanceof ServerLevel sl) || !RayaConfig.PAT_REACTIONS.get()) return;
+        long now = sl.getGameTime();
+        if (now - this.lastPatTime < 6) return; // дубль от двух путей (ванильный интеракт + пакет)
+        this.patStreak = (now - this.lastPatTime < 200) ? this.patStreak + 1 : 1;
+        this.lastPatTime = now;
+        sl.sendParticles(ParticleTypes.HEART, getX(), getY() + 0.9D, getZ(), 2, 0.3D, 0.2D, 0.3D, 0.02D);
+        sl.playSound(null, this.blockPosition(), SoundEvents.AMETHYST_BLOCK_CHIME, SoundSource.NEUTRAL, 0.7F, 1.4F + this.random.nextFloat() * 0.4F);
+        if (!isAnimActive() || getAnimId() == ANIM_THINK) playAnimation(ANIM_LOVE, animDuration(ANIM_LOVE));
+        showEmotion(EMOTION_HAPPY, 120);
+        if (this.petCooldown > 0) return;
+        this.petCooldown = 140;
+        String[] pool = this.patStreak >= 9 ? PAT_OVERLOAD_LINES : this.patStreak >= 4 ? PAT_MANY_LINES : PAT_LINES;
+        say(pool[this.random.nextInt(pool.length)], RayaVoice.Mood.HAPPY);
+    }
+
+    /** Самостоятельная реакция на событие (с общей паузой, чтобы не болтать без остановки). */
+    public void react(String text, RayaVoice.Mood mood, int anim) {
+        if (!RayaConfig.EVENT_REACTIONS.get() || this.reactCooldown > 0 || this.afraid) return;
+        this.reactCooldown = 300;
+        if (anim != ANIM_NONE) playAnimation(anim, animDuration(anim));
+        say(text, mood);
+    }
+
+    public void reactAny(String[] lines, RayaVoice.Mood mood, int anim) {
+        react(lines[this.random.nextInt(lines.length)], mood, anim);
+    }
+
+    /** Нажать кнопку/рычаг/дверь и т.п. Возвращает true, когда задача выполнена. */
+    public boolean tickUseBlock(BlockPos pos) {
+        if (!RayaConfig.ALLOW_USE_BLOCKS.get()) {
+            tell("Нажимать блоки мне запрещено в конфиге.");
+            return true;
+        }
+        if (!canActOn(pos)) {
+            tell("Эта точка вне допустимой зоны.");
+            return true;
+        }
+        double d = this.distanceToSqr(Vec3.atCenterOf(pos));
+        if (d > 12.0D) {
+            this.flyTo(pos.getX() + 0.5D, pos.getY() + 1.2D, pos.getZ() + 0.5D, 1.35D);
+            return false;
+        }
+        this.getLookControl().setLookAt(pos.getX() + 0.5D, pos.getY() + 0.5D, pos.getZ() + 0.5D);
+        BlockState st = this.level().getBlockState(pos);
+        net.minecraft.world.level.block.Block b = st.getBlock();
+        boolean ok = b instanceof net.minecraft.world.level.block.ButtonBlock
+                || b instanceof net.minecraft.world.level.block.LeverBlock
+                || b instanceof net.minecraft.world.level.block.DoorBlock
+                || b instanceof net.minecraft.world.level.block.TrapDoorBlock
+                || b instanceof net.minecraft.world.level.block.FenceGateBlock
+                || b instanceof net.minecraft.world.level.block.NoteBlock;
+        Player owner = getOwnerPlayer();
+        if (!ok || owner == null) {
+            tell("Этот блок я не умею нажимать.");
+            return true;
+        }
+        BlockHitResult hit = new BlockHitResult(Vec3.atCenterOf(pos), Direction.UP, pos, false);
+        st.useWithoutItem(this.level(), owner, hit);
+        playAnimation(ANIM_WORK, 10);
+        return true;
+    }
+
     // ---------- Полёт с обходом препятствий ----------
     private Vec3 flyGoal = null;
     private int flyRepath = 0;
@@ -1562,7 +1632,8 @@ public class RayaPrimeEntity extends PathfinderMob {
             PLACE_BLOCK,
             FLY_TO,
             COLLECT_ITEMS,
-            DEPOSIT
+            DEPOSIT,
+            USE_BLOCK
         }
     }
 }

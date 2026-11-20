@@ -629,6 +629,7 @@ public class ModKnowledgeScanner {
             if (!bs.isEmpty()) ctx.append(bs).append('\n');
             String wps = raya.getWaypointSummary(player.blockPosition());
             if (!wps.isEmpty()) ctx.append("Запомненные места: ").append(wps).append('\n');
+            if (player.getServer() != null) ctx.append("Игроков на сервере: ").append(player.getServer().getPlayerCount()).append('\n');
             String notes = raya.getNotesSummary();
             if (!notes.isEmpty()) ctx.append("Твои заметки (память о носителе): ").append(notes).append('\n');
             String rems = raya.getRemindersSummary();
